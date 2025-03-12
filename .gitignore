@@ -2,3 +2,4 @@
 /test/Manifest.toml
 /sims/Manifest.toml
 settings.json
+*.code-workspace
