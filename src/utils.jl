@@ -1,0 +1,1 @@
+logbinomial(n,k) = logfactorial(n)-logfactorial(k)-logfactorial(n-k)

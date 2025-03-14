@@ -12,153 +12,57 @@
 # Furthermore, it allows RandomHAL to sample random subsets of possible knots and sections
 # without needing to enumerate the entire basis matrix of the full HAL model first. 
 
-"""
-    highly_adaptive_basis(X::Matrix, smoothness::Int)
+struct HALBasis
+    smoothness::Int
+    sections::Vector{Vector{Int}}
+    knots::Vector{Vector{Float64}}
+end
 
-Generate a basis matrix for the Highly Adaptive Lasso from data `X` assuming each combination of existing data point and section constitutes a basis function.
+# A collection of functions to coerce a column of data into a basis function
+basis_function(Xcol::Union{Vector{Bool}, BitVector}) = Xcol
+basis_function(Xcol::Union{Vector{Bool}, BitVector}, smoothness::Int) = Xcol
+basis_function(Xcol::Vector{<:Real}) = (transpose(Xcol) .>= Xcol)
+basis_function(Xcol::Vector{<:Real}, smoothness::Int) = basis_function(Xcol) .* (transpose(Xcol) .- Xcol).^smoothness ./ factorial(smoothness)
 
-# Arguments
-- `X::Matrix`: A matrix of input data where each row represents an observation and each column represents a feature.
-- `smoothness::Int`: An integer specifying the order of the spline fit over each section of the data.
-
-# Returns
-- A matrix where each column represents a basis function. Each basis function is computed by checking if the elements in the specified sections of `X` are greater than the corresponding knots.
-
-"""
-function highly_adaptive_basis(X::Matrix, smoothness::Int)
-    n, d = size(X)
-
+function ha_basis_matrix(X::Tables.Columns, smoothness::Int)
     # Generate basis without interactions
-    #main_terms = reduce(hcat, (transpose(Xcol) .<= Xcol) .* (Xcol.^smoothness) for Xcol in eachcol(X))
-    main_terms = reduce(hcat, (transpose(Xcol) .<= Xcol) for Xcol in eachcol(X))
+    main_terms = (smoothness == 0) ? 
+        map(x -> basis_function(x), X) :
+        map(x -> basis_function(x, smoothness), X)
 
-    # Generate indices representing rank transform of each feature
-    feature_indices = [(n*(j-1) + 1):(n*j) for j in 1:d]
-    
-    # Generate subsets of rank-transformed features representing interaction terms
-    feature_subsets = Combinatorics.powerset(feature_indices, 2)
-    
-    if d > 1
-        interactions = reduce(hcat, map(fs -> reduce(.*, map(x -> main_terms[:, x], fs)), feature_subsets))
-        return hcat(main_terms, interactions)
+    if length(X) == 1
+        # Glue all the main terms into one matrix
+        return reduce(hcat, main_terms)
     else
-        return main_terms
+        # Generate all possible interaction terms
+        interactions = [reduce(.*, main_term) for main_term in powerset(main_terms,2)]
+        # Glue main terms and interactions into one matrix
+        main_and_interactions = vcat(main_terms, interactions)
+        term_lengths = size.(main_and_interactions, 2)
+        return reduce(hcat, main_and_interactions), term_lengths
     end
 end
 
-"""
-    highly_adaptive_parameters(X::Matrix, lasso::GLMNetCrossValidation)
+basis_function(X::Matrix, section, knot, smoothness) = prod((view(X, :, section) .>= transpose(knot)) .* (view(X, :, section) .- transpose(knot)).^smoothness ./ factorial(smoothness), dims = 2)
 
-Extract the sections, knots, and nonzero coefficients selected by a Highly Adaptive Lasso fit using GLMNet.
-
-# Arguments
-- `X::Matrix`: A matrix of input data where each row represents an observation and each column represents a feature.
-- `lasso::GLMNetCrossValidation`: A GLMNetCrossValidation object representing the LASSO fit.
-
-# Returns
-- `sections`: A collection of indices specifying which columns of `X` to consider for each basis function.
-- `knots`: A collection of threshold values for each section. Each element in `knots` corresponds to a section and contains the threshold values for that section.
-- `β`: A vector of coefficients corresponding to the nonzero coefficients selected by the LASSO fit.
-- `β0`: The intercept term selected by the LASSO fit.
-
-"""
-function highly_adaptive_parameters(X::Matrix, lasso::GLMNetCrossValidation)
-
-    # Get initial data dimensions
-    n, d = size(X)
-
-    # Extract selected nonzero coefficients from lasso fit
-    best = argmin(vec(mean(reduce(hcat, lasso.losses[length.(lasso.losses) .> 0]), dims = 2)))
-    β0 = lasso.path.a0[best]
-    βvec = lasso.path.betas[:, best]
-    nz = [i for i in 1:length(βvec) if βvec[i] != 0]
-    β = βvec[nz]
-    
-    # Reverse engineer the unit-feature combinations selected by lasso
-    unit_dom = (nz .% n) # observation to dominate
-    unit_dom[unit_dom .== 0] .= n # fix indexing when first observation is chosen
-    feature_dom = ((nz .- 1) .÷ n) .+ 1 # variable combination number to dominate
-    feature_combinations = collect(Combinatorics.powerset(1:d, 1)) # generate powerset
-    
-    # Construct the vector of sections selected by LASSO
-    sections = [feature_combinations[fd] for fd in feature_dom]  
-
-    # Construct the set of knot-points for each section selected by LASSO
-    knots = [X[unit_dom[i], sections[i]] for i in 1:length(unit_dom)]
-
-    return (sections = sections, knots = knots, β = β, β0 = β0)
+# Basis matrix for 0-order HAL
+function ha_basis_matrix(X::Tables.Columns, sections, knots)
+    Xmat = Tables.matrix(X)
+    Xe = view(Xmat, :, reduce(vcat, sections)) .>= transpose(reduce(vcat, knots))
+    reduce(hcat, [prod(view(Xe, :, section), dims = 2) for section in sections])
 end
 
-"""
-    highly_adaptive_parameters(sections, knots, lasso::GLMNetCrossValidation)
-
-Extract the sections, knots, and nonzero coefficients selected by a Highly Adaptive Lasso fit using GLMNet.
-
-# Arguments
-- `X::Matrix`: A matrix of input data where each row represents an observation and each column represents a feature.
-- `lasso::GLMNetCrossValidation`: A GLMNetCrossValidation object representing the LASSO fit.
-
-# Returns
-- `sections`: A collection of indices specifying which columns of `X` to consider for each basis function.
-- `knots`: A collection of threshold values for each section. Each element in `knots` corresponds to a section and contains the threshold values for that section.
-- `β`: A vector of coefficients corresponding to the nonzero coefficients selected by the LASSO fit.
-- `β0`: The intercept term selected by the LASSO fit.
-
-"""
-function highly_adaptive_parameters(sections, knots, lasso::GLMNetCrossValidation)
-    # Extract selected nonzero coefficients from lasso fit
-    best = argmin(vec(mean(reduce(hcat, lasso.losses[length.(lasso.losses) .> 0]), dims = 2)))
-    β0 = lasso.path.a0[best]
-    βvec = lasso.path.betas[:, best]
-    nz = [i for i in 1:length(βvec) if βvec[i] != 0]
-
-    β = βvec[nz]
-    nz = [i for i in 1:length(βvec) if βvec[i] != 0]
-
-    # Construct the vector of sections selected by LASSO
-    sections = sections[nz]
-
-    # Construct the set of knot-points for each section selected by LASSO
-    knots = knots[nz]
-
-    return (sections = sections, knots = knots, β = β, β0 = β0)
+# Basis matrix for higher-order HAL
+function ha_basis_matrix(X::Tables.Columns, sections, knots, smoothness)
+    if smoothness == 0
+        return ha_basis_matrix(X, sections, knots)
+    else
+        Xmat = Tables.matrix(X)
+        Xe = view(Xmat, :, reduce(vcat, sections))
+        Xe = Xe .- transpose(reduce(vcat, knots))
+        Xe[Xe .< 0.0] .= 0
+        Xe = coef .* Xe .^ smoothness
+        return reduce(hcat, [prod(view(Xe, :, section), dims = 2) for section in sections])
+    end
 end
 
-"""
-    highly_adaptive_basis(X::Matrix, sections, knots, smoothness::Int)
-
-Generate a basis matrix for the Highly Adaptive Lasso from data `X` using the specified section and knot parameters
-
-# Arguments
-- `X::Matrix`: A matrix of input data where each row represents an observation and each column represents a feature.
-- `sections`: A collection of indices specifying which columns of `X` to consider for each basis function.
-- `knots`: A collection of threshold values for each section. Each element in `knots` corresponds to a section and contains the threshold values for that section.
-- `smoothness::Int`: An integer specifying the order of the spline fit over each section of the data.
-
-# Returns
-- A matrix where each column represents a basis function. Each basis function is computed by checking if the elements in the specified sections of `X` are greater than the corresponding knots.
-
-"""
-function highly_adaptive_basis(X::Matrix, sections, knots, smoothness::Int)
-    # transpose to take advantage of Julia's column-major order
-    Xt = LinearAlgebra.transpose(X) 
-
-    # Compute indicator functions over each section
-    return LinearAlgebra.transpose(reduce(vcat, [prod(view(Xt, sections[j], :) .>= knots[j], dims=1) for j in 1:length(knots)]))
-end
-
-function random_sections_and_knots(X::Matrix, model)
-    n, d = size(X)
-
-    # Select sections by first selecting a random section size according to binomial law,
-    # then selecting random section indices uniformly. 
-    section_dist = DiscreteNonParametric(1:d, binomial.(d, 1:d) ./ (2^d - 1))
-    section_sizes = rand(section_dist, model.nfeatures)
-    sections = map(k -> sample(1:d, k; replace = false), section_sizes)
-
-    # Select random knots and construct random basis
-    knot_dist = DiscreteUniform(1, n)
-    knots = [view(X, rand(knot_dist), s) for s in sections]
-
-    return sections, knots
-end
