@@ -9,8 +9,6 @@ import LogExpFunctions: logistic
 using Tables
 import Combinatorics: powerset
 
-include("../src/RandomHAL.jl")
-
 Random.seed!(1234)
 dgp = @dgp(
         X2 ~ Beta(2, 3),
