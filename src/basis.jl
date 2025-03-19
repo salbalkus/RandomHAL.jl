@@ -12,44 +12,49 @@
 # Furthermore, it allows RandomHAL to sample random subsets of possible knots and sections
 # without needing to enumerate the entire basis matrix of the full HAL model first. 
 
-struct HALBasis
-    smoothness::Int
-    sections::Vector{Vector{Int}}
-    knots::Vector{Vector{Float64}}
-end
-
 # A collection of functions to coerce a column of data into a basis function
-basis_function(Xcol::Union{Vector{Bool}, BitVector}) = Xcol
-basis_function(Xcol::Union{Vector{Bool}, BitVector}, smoothness::Int) = Xcol
-basis_function(Xcol::Vector{<:Real}) = (transpose(Xcol) .>= Xcol)
-basis_function(Xcol::Vector{<:Real}, smoothness::Int) = basis_function(Xcol) .* (transpose(Xcol) .- Xcol).^smoothness ./ factorial(smoothness)
+basis_function(Xcol::AbstractVector{<:Real}) = Xcol .>= transpose(Xcol)
+basis_function(Xcol::AbstractVector{<:Real}, smoothness::Int) = basis_function(Xcol) .* (Xcol .- transpose(Xcol)).^smoothness ./ factorial(smoothness)
 
+clean_binary(X, main_terms) = [t == Bool ? Tables.getcolumn(X, i) : main_terms[i] for (i, t) in enumerate(Tables.schema(X).types)]
+
+# Constructing basis matrix on training data directly
 function ha_basis_matrix(X::Tables.Columns, smoothness::Int)
     # Generate basis without interactions
     main_terms = (smoothness == 0) ? 
         map(x -> basis_function(x), X) :
         map(x -> basis_function(x, smoothness), X)
 
-    if length(X) == 1
-        # Glue all the main terms into one matrix
-        return reduce(hcat, main_terms)
-    else
-        # Generate all possible interaction terms
-        interactions = [reduce(.*, main_term) for main_term in powerset(main_terms,2)]
-        # Glue main terms and interactions into one matrix
-        main_and_interactions = vcat(main_terms, interactions)
-        term_lengths = size.(main_and_interactions, 2)
-        return reduce(hcat, main_and_interactions), term_lengths
-    end
-end
+    # Generate all possible interaction terms
+    interactions = ncol(X) == 1 ? [] : [reduce(.*, main_term) for main_term in powerset(main_terms,2)]
 
-basis_function(X::Matrix, section, knot, smoothness) = prod((view(X, :, section) .>= transpose(knot)) .* (view(X, :, section) .- transpose(knot)).^smoothness ./ factorial(smoothness), dims = 2)
+    # Reduce binary basis functions to eliminate duplicates
+    # We need to do this after generating interactions because the full "block" is needed
+    # to compute interactions even for binary variables, but it contains many duplicate terms
+    main_terms = clean_binary(X, main_terms)
+    
+    # Glue main terms and interactions into one matrix
+    main_and_interactions = vcat(main_terms, interactions)    
+    
+    # Compute how many basis functions for each "term" in the linear model
+    term_lengths = size.(main_and_interactions, 2)
+    
+    return reduce(hcat, main_and_interactions), term_lengths
+end
 
 # Basis matrix for 0-order HAL
 function ha_basis_matrix(X::Tables.Columns, sections, knots)
     Xmat = Tables.matrix(X)
     Xe = view(Xmat, :, reduce(vcat, sections)) .>= transpose(reduce(vcat, knots))
-    reduce(hcat, [prod(view(Xe, :, section), dims = 2) for section in sections])
+
+    i = 1
+    output = BitMatrix(undef, nrow(X), length(sections))
+    for (j, section) in enumerate(sections)
+        indices = i:(i + length(section) - 1)
+        output[:, j] = prod(view(Xe, :, indices), dims = 2)
+        i = i + length(section)
+    end
+    return output
 end
 
 # Basis matrix for higher-order HAL
@@ -60,9 +65,17 @@ function ha_basis_matrix(X::Tables.Columns, sections, knots, smoothness)
         Xmat = Tables.matrix(X)
         Xe = view(Xmat, :, reduce(vcat, sections))
         Xe = Xe .- transpose(reduce(vcat, knots))
-        Xe[Xe .< 0.0] .= 0
+        Xe[Xe .< 0.0] .= 0.0
         Xe = coef .* Xe .^ smoothness
-        return reduce(hcat, [prod(view(Xe, :, section), dims = 2) for section in sections])
+        
+        i = 1
+        output = BitMatrix(undef, nrow(X), length(sections))
+        for (j, section) in enumerate(sections)
+            indices = i:(i + length(section) - 1)
+            output[:, j] = prod(view(Xe, :, indices), dims = 2)
+            i = i + length(section)
+        end
+        return output
     end
 end
 

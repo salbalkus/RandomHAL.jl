@@ -1,8 +1,8 @@
 
 # Helper function to extract the nonzero coefficients from a LASSO fit
-function fit_glmnet(basis::AbstractMatrix, y::AbstractVector; nlambda::Int = 100, nfolds::Int = 5)
+function fit_glmnet(basis::AbstractMatrix, y::Union{AbstractVector{<:Number}, AbstractMatrix{<:Number}}, family; kwargs...)
     # Fit lasso model
-    lasso = glmnetcv(basis, y, Normal(); standardize = false, nlambda = 100, nfolds = 5)
+    lasso = glmnetcv(basis, y, family; kwargs...)
 
     # Extract coefficients selected by LASSO and their indices in the basis
     best = argmin(vec(mean(reduce(hcat, lasso.losses[length.(lasso.losses) .> 0]), dims = 2)))
@@ -10,14 +10,14 @@ function fit_glmnet(basis::AbstractMatrix, y::AbstractVector; nlambda::Int = 100
     βvec = lasso.path.betas[:, best]
     nz = [i for i in 1:length(βvec) if βvec[i] != 0]
     β = βvec[nz]
-    return β, β0, nz
+    return lasso, β, β0, nz
 end
 
 # Helper function to extract the sections and knots selected by a LASSO fit on the matrix version of the basis
-function get_sections_and_knots(X, nonzero_indices)
+function get_sections_and_knots(X, nonzero_indices, term_lengths)
     coltypes = Tables.schema(X).types # Get type of each variable
     # List all possible interactions of variables
-    all_possible_interactions = powerset(1:4, 1)
+    all_possible_interactions = powerset(1:ncol(X), 1)
     sections = Vector{Vector{Int}}(undef, length(nonzero_indices))
     knots = Vector{Vector{Real}}(undef, length(nonzero_indices))
     # Set up iteration trackers
@@ -45,10 +45,11 @@ function get_sections_and_knots(X, nonzero_indices)
     return sections, knots
 end
 
+# Randomly sample basis functions for RandomHAL
 # p controls how much sampling is biased towards the main terms
 function random_sections_and_knots(X::Tables.Columns, nfeatures; p = 0.5)
-    d = DataAPI.ncol(X) # Number of features
-    n = DataAPI.nrow(X) # Number of observations
+    d = ncol(X) # Number of features
+    n = nrow(X) # Number of observations
     coltypes = Tables.schema(X).types
 
     # Decide how to sample sections and knots
