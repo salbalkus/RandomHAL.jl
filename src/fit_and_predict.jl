@@ -6,16 +6,17 @@ mutable struct HALParameters
     β::AbstractVector{Real}
     β0::Real
     smoothness::Int
+    diff::Bool
 end
 
 # Fit a "vanilla" HAL model
-function fit_hal(X, y, family, smoothness::Int, weights::AbstractVector{<:Real}; glmnet_args...)
+function fit_hal(X, y, family, diff::Bool, smoothness::Int, weights::AbstractVector{<:Real}; glmnet_args...)
 
     # Convert any Table into a common type
     x = Tables.Columns(X)
 
     # Construct the basis matrix from the data
-    basis, term_lengths = ha_basis_matrix(x, smoothness)
+    basis, term_lengths = ha_basis_matrix(x, smoothness; diff = diff)
 
     # Fit the LASSO model (remember in Julia rightmost keyword arguments take precedence)
     lasso, β, β0, nz = fit_glmnet(basis, y, family; glmnet_args..., weights = weights)
@@ -23,11 +24,11 @@ function fit_hal(X, y, family, smoothness::Int, weights::AbstractVector{<:Real};
     # Extract the sections and knots representing basis functions selected by LASSO
     sections, knots = get_sections_and_knots(x, nz, term_lengths)
 
-    return HALParameters(sections, knots, β, β0, smoothness), lasso
+    return HALParameters(sections, knots, β, β0, smoothness, diff), lasso
 end
 
 # If no weights are provided, assume equal weights
-fit_hal(X, y, family, smoothness::Int, weights::Nothing; glmnet_args...) = fit_hal(X, y, family, smoothness, ones(nrow(X)); glmnet_args...)
+fit_hal(X, y, family, diff::Bool, smoothness::Int, weights::Nothing; glmnet_args...) = fit_hal(X, y, family, diff, smoothness, ones(nrow(X)); glmnet_args...)
 
 # Fit a randomized approximation to the full HAL model for computational efficiency
 function fit_random_hal(X, y, family, smoothness::Int, nfeatures::Int, p::Float64, weights::AbstractVector{<:Real}; glmnet_args...)
@@ -46,7 +47,7 @@ function fit_random_hal(X, y, family, smoothness::Int, nfeatures::Int, p::Float6
     sections = sections[nz]
     knots = knots[nz]
 
-    return HALParameters(sections, knots, β, β0, smoothness), lasso
+    return HALParameters(sections, knots, β, β0, smoothness, diff), lasso
 end
 
 # Fit RandomHAL with the asymptotically optimal number of basis functions 
@@ -72,7 +73,7 @@ fit_random_hal(X, y, family, smoothness::Int, nfeatures::Nothing, p::Nothing, we
 function predict_hal(params::HALParameters, Xnew)
     x = Tables.Columns(Xnew)
     if(length(params.β) > 0)
-        basis = ha_basis_matrix(x, params.sections, params.knots, params.smoothness)
+        basis = ha_basis_matrix(x, params.sections, params.knots, params.smoothness; diff = params.diff)
         return (basis * params.β) .+ params.β0
     else
         return params.β0 .* ones(nrow(x))

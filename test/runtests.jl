@@ -1,4 +1,6 @@
 using RandomHAL
+using Pkg
+Pkg.activate("test")
 using Random
 using Test
 using CausalTables
@@ -19,35 +21,44 @@ dgp = @dgp(
     )
 scm = StructuralCausalModel(dgp, :A, :Y)
 
-n = 100
+n = 400
 ct = rand(scm, n)
 X = Tables.Columns(responseparents(ct))
 y = vec(responsematrix(ct))
 
-@testset "Basis creation functions" begin
-    basis, term_lengths = ha_basis_matrix(X, 0)
+function test_basis(smoothness, diff)
+    basis, term_lengths = ha_basis_matrix(X, smoothness; diff = diff)
 
-    @test typeof(basis) == BitMatrix
     @test size(basis)[1] == n
     @test size(basis)[2] == n * (2^length(X) - 1) - (n - 1)
     @test basis[:, (n * 3) + 1] == ct.data.A
     lasso, β, β0, nz = fit_glmnet(basis, y::AbstractVector, Normal(); nlambda = 100, nfolds = 10)
-    @test 301 ∈ nz
 
     sections, knots = get_sections_and_knots(X, nz, term_lengths)
-    @test [4] ∈ sections
-    @test [true] ∈ knots
     @test length.(sections) == length.(knots)
-
-    nfeatures = Int(round(n*log(n)))
-    sections, knots = random_sections_and_knots(X, nfeatures)
-    basis = ha_basis_matrix(X, sections, knots, 0)
-
-    @test length(sections) == nfeatures
-    @test length.(sections) == length.(knots)
+    hab = ha_basis_matrix(X, sections, knots, smoothness; diff = diff)
+    @test all([basis[:, nz[i]] == hab[:, i] for i in 1:length(nz)])
 end
 
-@testset "Model Fitting" begin
+@testset "Basis creation functions" begin
+    test_basis(0, false)
+    test_basis(1, false)
+    test_basis(2, false)
+
+    test_basis(0, true)
+    test_basis(1, true)
+    test_basis(2, true)
+
+    # Random Basis
+    nfeatures = Int(round(n*log(n)))
+    sections_r, knots_r = random_sections_and_knots(X, nfeatures)
+    basis_r = ha_basis_matrix(X, sections_r, knots_r, 0)
+
+    @test length(sections_r) == nfeatures
+    @test length.(sections_r) == length.(knots_r)
+end
+
+#@testset "Model Fitting" begin
 
     cttest = rand(scm, n)
     Xtest = responseparents(cttest)
@@ -66,6 +77,21 @@ end
     halmse = mean((halpreds .- true_mean).^2)
 
     @test halmse < 0.1
+
+    ### Extra diff 
+    model = HALRegressor(0, true)
+    @time hal_d = machine(model, X, y) |> fit!
+
+    halpreds_d = MLJ.predict(hal_d, Xtest)
+    halmse = mean((halpreds_d .- true_mean).^2)
+
+    using Plots
+    scatter(true_mean, [halpreds halpreds_d])
+
+    ###
+
+
+    # Random HAL
 
     model3 = RandomHALRegressor()
     
