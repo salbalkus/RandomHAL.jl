@@ -14,17 +14,17 @@ function fit_glmnet(basis::AbstractMatrix, y::Union{AbstractVector{<:Number}, Ab
 end
 
 # Helper function to extract the sections and knots selected by a LASSO fit on the matrix version of the basis
-function get_sections_and_knots(X, nonzero_indices, term_lengths)
+function get_sections_and_knots(X, nonzero_indices, term_lengths, all_possible_sections)
     coltypes = Tables.schema(X).types # Get type of each variable
     # List all possible interactions of variables
-    all_possible_interactions = powerset(1:ncol(X), 1)
     sections = Vector{Vector{Int}}(undef, length(nonzero_indices))
     knots = Vector{Vector{Real}}(undef, length(nonzero_indices))
+
     # Set up iteration trackers
     cur_basis_index = 1
-    prev_basis_bound = 0
-    cur_basis_bound = term_lengths[1]
-    cur_interaction, state = iterate(all_possible_interactions)
+    prev_basis_bound = 0 
+    cur_basis_bound = term_lengths[1] # Keeps track of which "block" of the basis we are in
+    cur_section, state = iterate(all_possible_sections)
 
     # Iterate through all nonzero basis coefficients to extract sections and knots
     for (i, nz) in enumerate(nonzero_indices)
@@ -33,13 +33,15 @@ function get_sections_and_knots(X, nonzero_indices, term_lengths)
             cur_basis_index += 1
             prev_basis_bound = cur_basis_bound
             cur_basis_bound += term_lengths[cur_basis_index]
-            cur_interaction, state = iterate(all_possible_interactions, state)
+            cur_section, state = iterate(all_possible_sections, state)
         end
 
         # Reverse engineer the sections and knots from the basis function
-        sections[i] = cur_interaction
+        sections[i] = cur_section
         knot_index = nz - prev_basis_bound
-        knots[i] = coltypes[cur_interaction] == (Bool,) ? [true] : [Tables.getcolumn(X, s)[knot_index] for s in cur_interaction]
+
+        # THIS IS WRONG. NEED [true] FOR ANY BOOLS
+        knots[i] = coltypes[cur_section] == (Bool,) ? [true] : [Tables.getcolumn(X, s)[knot_index] for s in cur_section]
     end
 
     return sections, knots
