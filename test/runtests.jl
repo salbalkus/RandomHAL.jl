@@ -1,6 +1,4 @@
 using RandomHAL
-using Pkg
-Pkg.activate("test")
 using Random
 using Test
 using CausalTables
@@ -26,29 +24,24 @@ ct = rand(scm, n)
 X = Tables.Columns(responseparents(ct))
 y = vec(responsematrix(ct))
 
-function test_basis(smoothness, basis_type)
-    basis, term_lengths = ha_basis_matrix(X, smoothness)#; basis_type = basis_type)
+function test_basis(smoothness)
+    basis, all_sections, term_lengths = ha_basis_matrix(X, smoothness)#; basis_type = basis_type)
 
     @test size(basis)[1] == n
     @test size(basis)[2] == n * (2^length(X) - 1) - (n - 1)
-    @test basis[:, (n * 3) + 1] == ct.data.A
+    @test basis[:, (n * 7) + 1] == ct.data.A
     lasso, β, β0, nz = fit_glmnet(basis, y::AbstractVector, Normal(); nlambda = 100, nfolds = 10)
 
-    sections, knots = get_sections_and_knots(X, nz, term_lengths)
+    sections, knots = get_sections_and_knots(X, nz, all_sections, term_lengths)
     @test length.(sections) == length.(knots)
-    hab = ha_basis_matrix(X, sections, knots, smoothness; basis_type = basis_type)
+    hab = ha_basis_matrix(X, sections, knots, smoothness)
     @test all([basis[:, nz[i]] == hab[:, i] for i in 1:length(nz)])
 end
-#@testset "Basis creation functions" begin
-    test_basis(0, "standard")
-    test_basis(1, "standard")
-    test_basis(2, "standard")
 
-    test_basis(0, "diff")
-    test_basis(1, "diff")
-    test_basis(2, "diff")
-
-    test_basis(0, "count")
+@testset "Basis creation functions" begin
+    test_basis(0)
+    test_basis(1)
+    test_basis(2)
 
     # Random Basis
     nfeatures = Int(round(n*log(n)))
@@ -59,7 +52,7 @@ end
     @test length.(sections_r) == length.(knots_r)
 end
 
-@testset "Model Fitting" begin
+#@testset "Model Fitting" begin
 
     cttest = rand(scm, n)
     Xtest = responseparents(cttest)

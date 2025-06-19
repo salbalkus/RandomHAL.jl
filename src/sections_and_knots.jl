@@ -14,7 +14,7 @@ function fit_glmnet(basis::AbstractMatrix, y::Union{AbstractVector{<:Number}, Ab
 end
 
 # Helper function to extract the sections and knots selected by a LASSO fit on the matrix version of the basis
-function get_sections_and_knots(X, nonzero_indices, term_lengths, all_possible_sections)
+function get_sections_and_knots(X, nonzero_indices, all_possible_sections, term_lengths)
     coltypes = Tables.schema(X).types # Get type of each variable
     # List all possible interactions of variables
     sections = Vector{Vector{Int}}(undef, length(nonzero_indices))
@@ -40,8 +40,7 @@ function get_sections_and_knots(X, nonzero_indices, term_lengths, all_possible_s
         sections[i] = cur_section
         knot_index = nz - prev_basis_bound
 
-        # THIS IS WRONG. NEED [true] FOR ANY BOOLS
-        knots[i] = coltypes[cur_section] == (Bool,) ? [true] : [Tables.getcolumn(X, s)[knot_index] for s in cur_section]
+        knots[i] = [coltypes[s] == Bool ? true : Tables.getcolumn(X, s)[knot_index] for s in cur_section]
     end
 
     return sections, knots

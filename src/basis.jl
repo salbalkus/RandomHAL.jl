@@ -31,72 +31,26 @@ function all_interactions(main_terms::Vector{T}, limit::Int) where T <: Abstract
     return combined_interactions_and_main, sections
 end
 
-function ha_basis_matrix(X::Tables.Columns, smoothness::Int; interaction_limit::Int = nothing)
+function ha_basis_matrix(X::Tables.Columns, smoothness::Int; interaction_limit = nothing)
+    # Get the type of each column in the data
+    coltypes = Tables.schema(X).types
+
+    # Set the highest order of interaction to the maximum if not specified
     if isnothing(interaction_limit)
         interaction_limit = length(X)
     end
     
-    coltypes = Tables.schema(X).types
     main_terms = (smoothness == 0) ? 
         [coltypes[i] == Bool ? reshape(X[i], :, 1) : basis_function(X[i]) for i in 1:length(X)] :
-        [coltypes[i] == Bool ? reshape(X[i], :, 1) : basis_function(X[i], smoothness) for i in 1:length(X)]
+        [coltypes[i] == Bool ? reshape(Vector{Float64}(X[i]), :, 1) : basis_function(X[i], smoothness) for i in 1:length(X)]
     
-    main_terms_and_interactions, _ = all_interactions(main_terms, interaction_limit)
+    main_terms_and_interactions, all_sections = all_interactions(main_terms, interaction_limit)
     term_lengths = size.(main_terms_and_interactions, 2)
 
-    return reduce(hcat, main_terms_and_interactions), term_lengths
+    return reduce(hcat, main_terms_and_interactions), all_sections, term_lengths
 end
 
-# Basis matrix for 0-order HAL
-function ha_basis_matrix_0(X::Tables.Columns, sections, knots)
-    Xmat = Tables.matrix(X)
-    Xe = view(Xmat, :, reduce(vcat, sections)) .>= transpose(reduce(vcat, knots))
-    output = BitMatrix(undef, nrow(X), length(sections))
-    # Iterate through each basis function
-    i = 1
-    for (j, section) in enumerate(sections)
-        # Select indices of variables placed next to each other in Xe as a section
-        indices = i:(i + length(section) - 1) 
-
-        # Compute the product of the selected variables as the interaction
-        # (if a main term, "indices" will inclue only one index)
-        output[:, j] = prod(view(Xe, :, indices), dims = 2)
-        i = i + length(section)
-    end
-
-    return output
-end
-
-# Basis matrix for higher-order HAL
-function ha_basis_matrix(X::Tables.Columns, sections, knots, smoothness)
-    if smoothness == 0
-        return ha_basis_matrix_0(X, sections, knots)
-    else
-        Xmat = Tables.matrix(X)
-        Xe = view(Xmat, :, reduce(vcat, sections))
-        Xe_ind = view(Xmat, :, reduce(vcat, sections)) .>= transpose(reduce(vcat, knots))
-        Xe = Xe_ind .* ((Xe .- transpose(reduce(vcat, knots))) .^ smoothness) ./ factorial(smoothness)
-        
-        # Iterate through each basis function
-        i = 1
-        output = Matrix{Float64}(undef, nrow(X), length(sections))
-        for (j, section) in enumerate(sections)
-            # Select indices of variables placed next to each other in Xe as a section
-            indices = i:(i + length(section) - 1)
-            # Compute the product of the selected variables as the interaction
-            # (if a main term, "indices" will inclue only one index)
-            if (length(indices) == 1) && (Tables.schema(X).types[section][1] == Bool)
-                output[:, j] = Tables.getcolumn(X, section[1])
-            else
-                output[:, j] = prod(view(Xe, :, indices), dims = 2)
-            end
-            i = i + length(section)
-        end
-        return X_output
-    end
-end
-
-function ha_basis_matrix(X::Tables.Columns, sections, knots, smoothness)
+function ha_basis_matrix(X::Tables.Columns, sections, knots, smoothness::Int)
     coltypes = Tables.schema(X).types
     Xmat = Tables.matrix(X)
 
@@ -115,7 +69,8 @@ function ha_basis_matrix(X::Tables.Columns, sections, knots, smoothness)
     # It's actually faster to compute every basis function in a single pass due to vectorization
     if smoothness > 0
         coef = factorial(smoothness)
-        X_basis = X_knots_ineq .* (X_sections .- X_knots) .^ (smoothness .* which_to_smooth) ./ coef
+        # TODO: Only smoothing non-binary variables using the power function might not be the most efficient way to do it
+        X_basis = X_knots_ineq .* ((X_sections .- X_knots) .^ smoothness ./ coef).^which_to_smooth
         X_output = Matrix{Float64}(undef, nrow(X), length(sections))
 
     else
