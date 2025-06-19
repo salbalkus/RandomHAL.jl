@@ -52,7 +52,7 @@ end
     @test length.(sections_r) == length.(knots_r)
 end
 
-#@testset "Model Fitting" begin
+@testset "Model Fitting" begin
 
     cttest = rand(scm, n)
     Xtest = responseparents(cttest)
@@ -64,7 +64,7 @@ end
     true_mean = conmean(scm, cttest, :Y)
 
     # HAL
-    model = HALRegressor(0, "standard")
+    model = HALRegressor(0)
     @time hal = machine(model, X, y) |> fit!
 
     halpreds = MLJ.predict(hal, Xtest)
@@ -72,42 +72,14 @@ end
 
     @test halmse < 0.1
 
-    ### Extra diff 
-    model_d = HALRegressor(0, "diff")
-    @time hal_d = machine(model_d, X, y) |> fit!
-
-    halpreds_d = MLJ.predict(hal_d, Xtest)
-    halmse_d = mean((halpreds_d .- true_mean).^2)
-
-    using Plots
-    scatter(true_mean, [halpreds halpreds_d], labels = ["Mean HAL" "Diff. HAL"])
-
-    ### Extra count 
-    model_c = HALRegressor(0, "count")
-    @time hal_c = machine(model_c, X, y) |> fit!
-
-    halpreds_c = MLJ.predict(hal_c, Xtest)
-    halmse_c = mean((halpreds_c .- true_mean).^2)
-
-    using Plots
-    scatter(true_mean, [halpreds halpreds_c], labels = ["Mean HAL" "Count HAL"])
-
     # Random HAL
     n_samples = Int(round(n * log(n)))
-    model3 = RandomHALRegressor(0, n, 5, n_samples, 0.5, "standard")
+    model3 = RandomHALRegressor(0, n, 5, n_samples, 0.5)
     
     @time rhal = machine(model3, X, y) |> fit!
 
     rhalpreds = MLJ.predict(rhal, Xtest)
     rhalmse = mean((rhalpreds .- true_mean).^2)
-
-    model4 = RandomHALRegressor(0, 100, 5, 2000, 0.5, "diff")
-    @time rhal2 = machine(model4, X, y) |> fit!
-
-    rhalpreds2 = MLJ.predict(rhal2, Xtest)
-    rhalmse2 = mean((rhalpreds2 .- true_mean).^2)
-
-    scatter(true_mean, [rhalpreds rhalpreds2], labels = ["Mean Random HAL" "Diff. Random HAL"])
 
     # RMSE are bounded
     @test rhalmse < 0.1
