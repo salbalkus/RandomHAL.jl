@@ -65,8 +65,45 @@ function random_sections_and_knots(X::Tables.Columns, nfeatures; p = 0.5)
         # Sample the features to include in the section
         sections[i] = sample(1:d, s, replace = false)
         # Select random knots
+        #knots[i] = coltypes[sections[i]] == (Bool,) ? [true] : [Tables.getcolumn(X, s)[rand(knot_dist)] for s in sections[i]]
+        knots[i] = [coltypes[s] == Bool ? true : Tables.getcolumn(X, s)[rand(knot_dist)] for s in sections[i]]
+
+    end
+
+    return sections, knots
+end
+
+function random_sections_and_knots2(X::Tables.Columns, n_sampled_features)
+    d = ncol(X) # Number of features
+    n = nrow(X) # Number of observations
+    coltypes = Tables.schema(X).types
+
+    # Decide how to sample sections and knots
+    section_dist = Binomial(d-1, p)
+    knot_dist = DiscreteUniform(1, n)
+
+    sections = Vector{Vector{Int}}(undef, n_sampled_features)
+    knots = Vector{Vector{Real}}(undef, n_sampled_features)
+
+    # First we construct the sections that we want to guarantee are in the basis
+
+    # Next, we build a distribution over the sections and sample from it
+
+    # Then, we build a distribution over the knots and sample from it
+
+    # Construct random basis
+    for i in 1:n_sampled_features
+        # Sample number of features to include in each section
+        s = 1 + rand(section_dist)
+        # Sample the features to include in the section
+        sections[i] = sample(1:d, s, replace = false)
+        # Select random knots
         knots[i] = coltypes[sections[i]] == (Bool,) ? [true] : [Tables.getcolumn(X, s)[rand(knot_dist)] for s in sections[i]]
     end
 
     return sections, knots
+end
+
+function sample_section(coltypes, n_sampled_features)
+    d = length(coltypes) # Number of features
 end

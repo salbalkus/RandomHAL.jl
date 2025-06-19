@@ -1,6 +1,6 @@
 const HAL_DEFAULT_NLAMBDA = 100
 const HAL_DEFAULT_NFOLDS = 5
-const HAL_DEFAULT_DIFF = false
+const HAL_DEFAULT_basis_type = "standard"
 
 
 ### Continuous Data ###
@@ -8,15 +8,15 @@ mutable struct HALRegressor <: MLJBase.Deterministic
     smoothness::Int
     nlambda::Int
     nfolds::Int
-    diff::Bool
+    basis_type::String
 end
 
-HALRegressor() = HALRegressor(0, HAL_DEFAULT_NLAMBDA, HAL_DEFAULT_NFOLDS, HAL_DEFAULT_DIFF)
-HALRegressor(smoothness) = HALRegressor(smoothness, HAL_DEFAULT_NLAMBDA, HAL_DEFAULT_NFOLDS, HAL_DEFAULT_DIFF)
-HALRegressor(smoothness, diff) = HALRegressor(smoothness, HAL_DEFAULT_NLAMBDA, HAL_DEFAULT_NFOLDS, diff)
+HALRegressor() = HALRegressor(0, HAL_DEFAULT_NLAMBDA, HAL_DEFAULT_NFOLDS, HAL_DEFAULT_basis_type)
+HALRegressor(smoothness) = HALRegressor(smoothness, HAL_DEFAULT_NLAMBDA, HAL_DEFAULT_NFOLDS, HAL_DEFAULT_basis_type)
+HALRegressor(smoothness, basis_type) = HALRegressor(smoothness, HAL_DEFAULT_NLAMBDA, HAL_DEFAULT_NFOLDS, basis_type)
 
 function MLJBase.fit(model::HALRegressor, verbosity, X, y, w = nothing)
-    params, lasso = fit_hal(X, y, Normal(), model.diff, model.smoothness, w; standardize = false, nlambda = model.nlambda, nfolds = model.nfolds)
+    params, lasso = fit_hal(X, y, Normal(), model.basis_type, model.smoothness, w; standardize = true, nlambda = model.nlambda, nfolds = model.nfolds)
     fitresult = (params = params,)
     cache = nothing
     report = (lasso=lasso,)
@@ -30,16 +30,16 @@ mutable struct HALBinaryClassifier <: MLJBase.Probabilistic
     smoothness::Int
     nlambda::Int
     nfolds::Int
-    diff::Bool
+    basis_type::String
 end
 
-HALBinaryClassifier() = HALBinaryClassifier(0, HAL_DEFAULT_NLAMBDA, HAL_DEFAULT_NFOLDS, HAL_DEFAULT_DIFF)
-HALBinaryClassifier(smoothness) = HALBinaryClassifier(smoothness, HAL_DEFAULT_NLAMBDA, HAL_DEFAULT_NFOLDS, HAL_DEFAULT_DIFF)
-HALBinaryClassifier(smoothness, diff) = HALBinaryClassifier(smoothness, HAL_DEFAULT_NLAMBDA, HAL_DEFAULT_NFOLDS, diff)
+HALBinaryClassifier() = HALBinaryClassifier(0, HAL_DEFAULT_NLAMBDA, HAL_DEFAULT_NFOLDS, HAL_DEFAULT_basis_type)
+HALBinaryClassifier(smoothness) = HALBinaryClassifier(smoothness, HAL_DEFAULT_NLAMBDA, HAL_DEFAULT_NFOLDS, HAL_DEFAULT_basis_type)
+HALBinaryClassifier(smoothness, basis_type) = HALBinaryClassifier(smoothness, HAL_DEFAULT_NLAMBDA, HAL_DEFAULT_NFOLDS, basis_type)
 
 
 function MLJBase.fit(model::HALBinaryClassifier, verbosity, X, y, w = nothing)
-    params, lasso = fit_hal(X, [.!(y) y], Binomial(), model.diff, model.smoothness, w; standardize = false, nlambda = model.nlambda, nfolds = model.nfolds)
+    params, lasso = fit_hal(X, [.!(y) y], Binomial(), model.basis_type, model.smoothness, w; standardize = true, nlambda = model.nlambda, nfolds = model.nfolds)
     fitresult = (params = params,)
 
     cache = nothing

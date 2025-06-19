@@ -24,17 +24,25 @@ basis_complement(Xcol::AbstractVector{<:Real}, smoothness::Int) = basis_compleme
 clean_binary(X, main_terms) = [t == Bool ? Tables.getcolumn(X, i) : main_terms[i] for (i, t) in enumerate(Tables.schema(X).types)]
 
 # Constructing basis matrix on training data directly
-function ha_basis_matrix(X::Tables.Columns, smoothness::Int; diff = false)
+function ha_basis_matrix(X::Tables.Columns, smoothness::Int; basis_type = "standard")
     # Generate basis without interactions
     main_terms = (smoothness == 0) ? 
         map(x -> basis_function(x), X) :
         map(x -> basis_function(x, smoothness), X)
     # Generate all possible interaction terms
-    interactions = ncol(X) == 1 ? [] : [reduce(.*, main_term) for main_term in powerset(main_terms,2)]
-    
+    if basis_type == "count"
+        if smoothness == 0
+            interactions = ncol(X) == 1 ? [] : [reduce(.+, main_term) for main_term in powerset(main_terms,2)]
+        else
+            error("The 'count' basis type is only supported for smoothness = 0.")
+        end
+    else
+        interactions = ncol(X) == 1 ? [] : [reduce(.*, main_term) for main_term in powerset(main_terms,2)]
+    end
+
     ### DIFFERENCE VERSION ###
     # Subtract off the complements if we want to use the "difference" version of HAL
-    if diff
+    if basis_type == "diff"
         main_terms_neg = (smoothness == 0) ? 
             map(x -> basis_complement(x), X) :
             map(x -> basis_complement(x, smoothness), X)
@@ -73,6 +81,24 @@ function ha_basis_matrix_0(X::Tables.Columns, sections, knots)
         # Compute the product of the selected variables as the interaction
         # (if a main term, "indices" will inclue only one index)
         output[:, j] = prod(view(Xe, :, indices), dims = 2)
+        i = i + length(section)
+    end
+    return output
+end
+
+function ha_count_matrix_0(X::Tables.Columns, sections, knots)
+    Xmat = Tables.matrix(X)
+    Xe = view(Xmat, :, reduce(vcat, sections)) .>= transpose(reduce(vcat, knots))
+    output = Matrix{Integer}(undef, nrow(X), length(sections))
+    # Iterate through each basis function
+    i = 1
+    for (j, section) in enumerate(sections)
+        # Select indices of variables placed next to each other in Xe as a section
+        indices = i:(i + length(section) - 1) 
+
+        # Compute the product of the selected variables as the interaction
+        # (if a main term, "indices" will inclue only one index)
+        output[:, j] = sum(view(Xe, :, indices), dims = 2)
         i = i + length(section)
     end
     return output
@@ -165,9 +191,15 @@ function ha_difference_matrix_s(X::Tables.Columns, sections, knots, smoothness)
     end
 end
 
-function ha_basis_matrix(X::Tables.Columns, sections, knots, smoothness; diff = false)
-    if diff
+function ha_basis_matrix(X::Tables.Columns, sections, knots, smoothness; basis_type = "standard")
+    if basis_type == "diff"
         return ha_difference_matrix_s(X, sections, knots, smoothness)
+    elseif basis_type == "count"
+        if smoothness == 0
+            return ha_count_matrix_0(X, sections, knots)
+        else
+            error("The 'count' basis type is only supported for smoothness = 0.")
+        end
     else
         return ha_basis_matrix_s(X, sections, knots, smoothness)
     end 
