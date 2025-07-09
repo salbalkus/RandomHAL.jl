@@ -8,6 +8,7 @@ module RandomHAL
     using Distributions
     using GLMNet
     using MLJBase
+    using InvertedIndices
 
     include("basis.jl")
     export ha_basis_matrix
@@ -23,6 +24,8 @@ module RandomHAL
 
     include("randomhal_mlj_interface.jl")
     export RandomHALRegressor, RandomHALBinaryClassifier
+
+    include("balancing.jl")
 
     export fit, predict
 end
