@@ -41,8 +41,8 @@ function ha_basis_matrix(X::Tables.Columns, smoothness::Int; interaction_limit =
     end
     
     main_terms = (smoothness == 0) ? 
-        [coltypes[i] == Bool ? reshape(X[i], :, 1) : basis_function(X[i]) for i in 1:length(X)] :
-        [coltypes[i] == Bool ? reshape(Vector{Float64}(X[i]), :, 1) : basis_function(X[i], smoothness) for i in 1:length(X)]
+        [basis_function(X[i]) for i in 1:length(X)] :
+        [coltypes[i] == Bool ? Matrix{Float64}(basis_function(X[i])) : basis_function(X[i], smoothness) for i in 1:length(X)]
     
     main_terms_and_interactions, all_sections = all_interactions(main_terms, interaction_limit)
     term_lengths = size.(main_terms_and_interactions, 2)
@@ -70,7 +70,7 @@ function ha_basis_matrix(X::Tables.Columns, sections, knots, smoothness::Int)
     if smoothness > 0
         coef = factorial(smoothness)
         # TODO: Only smoothing non-binary variables using the power function might not be the most efficient way to do it
-        X_basis = X_knots_ineq .* ((X_sections .- X_knots) .^ smoothness ./ coef).^which_to_smooth
+        X_basis = X_knots_ineq .* (((X_sections .- X_knots) .^ smoothness) ./ coef).^which_to_smooth
         X_output = Matrix{Float64}(undef, nrow(X), length(sections))
 
     else

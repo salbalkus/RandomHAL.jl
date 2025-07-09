@@ -3,6 +3,7 @@ module RandomHAL
     import DataAPI: ncol, nrow
     import LogExpFunctions: logistic
 
+    using StatsBase
     using Tables
     using Distributions
     using GLMNet

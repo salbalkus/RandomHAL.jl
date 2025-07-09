@@ -40,71 +40,55 @@ function get_sections_and_knots(X, nonzero_indices, all_possible_sections, term_
         sections[i] = cur_section
         knot_index = nz - prev_basis_bound
 
-        knots[i] = [coltypes[s] == Bool ? true : Tables.getcolumn(X, s)[knot_index] for s in cur_section]
+        #knots[i] = [coltypes[s] == Bool ? true : Tables.getcolumn(X, s)[knot_index] for s in cur_section]
+        knots[i] = [Tables.getcolumn(X, s)[knot_index] for s in cur_section]
     end
 
     return sections, knots
 end
 
-# Randomly sample basis functions for RandomHAL
-# p controls how much sampling is biased towards the main terms
-function random_sections_and_knots(X::Tables.Columns, nfeatures; p = 0.5)
+function random_sections_and_knots(X::Tables.Columns, n_sampled_features; guaranteed_sections = [], interaction_order_weights = nothing, section_weights = nothing, knot_weights = nothing)
     d = ncol(X) # Number of features
     n = nrow(X) # Number of observations
     coltypes = Tables.schema(X).types
-
-    # Decide how to sample sections and knots
-    section_dist = Binomial(d-1, p)
-    knot_dist = DiscreteUniform(1, n)
-
-    sections = Vector{Vector{Int}}(undef, nfeatures)
-    knots = Vector{Vector{Real}}(undef, nfeatures)
-    # Construct random basis
-    for i in 1:nfeatures
-        # Sample number of features to include in each section
-        s = 1 + rand(section_dist)
-        # Sample the features to include in the section
-        sections[i] = sample(1:d, s, replace = false)
-        # Select random knots
-        #knots[i] = coltypes[sections[i]] == (Bool,) ? [true] : [Tables.getcolumn(X, s)[rand(knot_dist)] for s in sections[i]]
-        knots[i] = [coltypes[s] == Bool ? true : Tables.getcolumn(X, s)[rand(knot_dist)] for s in sections[i]]
-
-    end
-
-    return sections, knots
-end
-
-function random_sections_and_knots2(X::Tables.Columns, n_sampled_features)
-    d = ncol(X) # Number of features
-    n = nrow(X) # Number of observations
-    coltypes = Tables.schema(X).types
-
-    # Decide how to sample sections and knots
-    section_dist = Binomial(d-1, p)
-    knot_dist = DiscreteUniform(1, n)
-
-    sections = Vector{Vector{Int}}(undef, n_sampled_features)
-    knots = Vector{Vector{Real}}(undef, n_sampled_features)
 
     # First we construct the sections that we want to guarantee are in the basis
+    if length(guaranteed_sections) > 0
+        fixed_sections = reduce(vcat, fill.(guaranteed_sections, n))
+        # TODO: Line below is relatively slow, could make it faster
+        fixed_knots = reduce(vcat, [[coltypes[s] == Bool ? true : X[s][i] for s in section] for i in 1:n] for section in guaranteed_sections)
+    else
+        fixed_sections = Vector{Vector{Int}}()
+        fixed_knots = Vector{Vector{Union{Real, Bool}}}()
+    end
+
+    random_sections = Vector{Vector{Int}}(undef, n_sampled_features)
+    random_knots = Vector{Vector{Real}}(undef, n_sampled_features)
 
     # Next, we build a distribution over the sections and sample from it
+    # We do this by specifying a distribution over the interaction orders,
+    # and then a distribution over the sections for each interaction order
+    if isnothing(interaction_order_weights)
+        interaction_order_weights = StatsBase.Weights(fill(1/d, d)) # Uniformly sample interaction orders
+    end
+
+    random_interaction_orders = sample(1:d, interaction_order_weights, n_sampled_features; replace = true)
+
+    if isnothing(section_weights)
+        section_weights = StatsBase.Weights(fill(1/d, d)) # Uniformly sample sections
+    end
+
+    random_sections = [sample(1:d, section_weights, o; replace = false) for o in random_interaction_orders]
 
     # Then, we build a distribution over the knots and sample from it
 
-    # Construct random basis
-    for i in 1:n_sampled_features
-        # Sample number of features to include in each section
-        s = 1 + rand(section_dist)
-        # Sample the features to include in the section
-        sections[i] = sample(1:d, s, replace = false)
-        # Select random knots
-        knots[i] = coltypes[sections[i]] == (Bool,) ? [true] : [Tables.getcolumn(X, s)[rand(knot_dist)] for s in sections[i]]
+    if isnothing(knot_weights)
+        knot_weights = StatsBase.Weights(fill(1/n, n)) # Uniformly sample knots
     end
 
-    return sections, knots
-end
-
-function sample_section(coltypes, n_sampled_features)
-    d = length(coltypes) # Number of features
+    random_knot_indices = sample(1:n, knot_weights, n_sampled_features; replace = true) 
+    #random_knots = [[coltypes[s] == Bool ? true : X[s][i] for s in section] for (section, i) in zip(random_sections, random_knot_indices)]
+    random_knots = [[X[s][i] for s in section] for (section, i) in zip(random_sections, random_knot_indices)]
+    # Construct random basis
+    return vcat(fixed_sections, random_sections), vcat(fixed_knots, random_knots)
 end

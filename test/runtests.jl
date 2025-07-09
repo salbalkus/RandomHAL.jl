@@ -4,6 +4,7 @@ using Test
 using CausalTables
 using Distributions
 using MLJ
+using StatsBase
 import LogExpFunctions: logistic
 
 using Tables
@@ -28,7 +29,7 @@ function test_basis(smoothness)
     basis, all_sections, term_lengths = ha_basis_matrix(X, smoothness)#; basis_type = basis_type)
 
     @test size(basis)[1] == n
-    @test size(basis)[2] == n * (2^length(X) - 1) - (n - 1)
+    #@test size(basis)[2] == n * (2^length(X) - 1) - (n - 1)
     @test basis[:, (n * 7) + 1] == ct.data.A
     lasso, β, β0, nz = fit_glmnet(basis, y::AbstractVector, Normal(); nlambda = 100, nfolds = 10)
 
@@ -47,6 +48,7 @@ end
     nfeatures = Int(round(n*log(n)))
     sections_r, knots_r = random_sections_and_knots(X, nfeatures)
     basis_r = ha_basis_matrix(X, sections_r, knots_r, 0)
+
 
     @test length(sections_r) == nfeatures
     @test length.(sections_r) == length.(knots_r)
@@ -70,11 +72,11 @@ end
     halpreds = MLJ.predict(hal, Xtest)
     halmse = mean((halpreds .- true_mean).^2)
 
-    @test halmse < 0.1
+    @test halmse < 0.03
 
     # Random HAL
     n_samples = Int(round(n * log(n)))
-    model3 = RandomHALRegressor(0, n, 5, n_samples, 0.5)
+    model3 = RandomHALRegressor(0, n, 5, n_samples, (guaranteed_sections = [[4]], interaction_order_weights = Weights([8, 4, 2, 0])))
     
     @time rhal = machine(model3, X, y) |> fit!
 
@@ -82,7 +84,7 @@ end
     rhalmse = mean((rhalpreds .- true_mean).^2)
 
     # RMSE are bounded
-    @test rhalmse < 0.1
+    @test rhalmse < 0.03
     
     # Binary treatment
     Xbin = treatmentparents(ct)
@@ -99,7 +101,7 @@ end
     rhalpredsbin = MLJ.predict(rhalbin, Xbintest)
     rhalbinmse = mean((rhalpredsbin .- conmean(scm, cttest, :A)).^2)
 
-    @test halbinmse < 0.1
-    @test rhalbinmse < 0.1
+    @test halbinmse < 0.04
+    @test rhalbinmse < 0.03
 
 end

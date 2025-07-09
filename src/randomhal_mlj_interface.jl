@@ -7,16 +7,18 @@ mutable struct RandomHALRegressor <: MLJBase.Deterministic
     nlambda::Int
     nfolds::Int
     nfeatures::Union{Int, Nothing}
-    sample_balance::Union{Float64, Nothing}
+    sampler_params::NamedTuple
 end
 
-RandomHALRegressor() = RandomHALRegressor(0, RHAL_DEFAULT_NLAMBDA, RHAL_DEFAULT_NFOLDS, nothing, nothing)
-RandomHALRegressor(nfeatures) = RandomHALRegressor(0, RHAL_DEFAULT_NLAMBDA, RHAL_DEFAULT_NFOLDS, nfeatures, nothing)
-RandomHALRegressor(smoothness, nfeatures) = RandomHALRegressor(smoothness, RHAL_DEFAULT_NLAMBDA, RHAL_DEFAULT_NFOLDS, nfeatures, nothing)
-RandomHALRegressor(smoothness, nfeatures, sample_balance) = RandomHALRegressor(smoothness, RHAL_DEFAULT_NLAMBDA, RHAL_DEFAULT_NFOLDS, nfeatures, sample_balance)
+RandomHALRegressor() = RandomHALRegressor(0, RHAL_DEFAULT_NLAMBDA, RHAL_DEFAULT_NFOLDS, nothing, NamedTuple())
+RandomHALRegressor(nfeatures) = RandomHALRegressor(0, RHAL_DEFAULT_NLAMBDA, RHAL_DEFAULT_NFOLDS, nfeatures, NamedTuple())
+RandomHALRegressor(smoothness, nfeatures) = RandomHALRegressor(smoothness, RHAL_DEFAULT_NLAMBDA, RHAL_DEFAULT_NFOLDS, nfeatures, NamedTuple())
+RandomHALRegressor(smoothness, nfeatures, sampler_params) = RandomHALRegressor(smoothness, RHAL_DEFAULT_NLAMBDA, RHAL_DEFAULT_NFOLDS, nfeatures, sampler_params)
 
 function MLJBase.fit(model::RandomHALRegressor, verbosity, X, y, w = nothing)
-    params, lasso = fit_random_hal(X, y, Normal(), model.smoothness, model.nfeatures, model.sample_balance, w; standardize = true, nlambda = model.nlambda, nfolds = model.nfolds)
+    n = length(y)
+    alpha = 1.0 - (1.0/sqrt(n))
+    params, lasso = fit_random_hal(X, y, Normal(), model.smoothness, model.nfeatures, model.sampler_params, w; standardize = true, nlambda = model.nlambda, nfolds = model.nfolds, alpha = alpha)
     fitresult = (params = params,)
     cache = nothing
     report = (lasso=lasso,)
@@ -31,16 +33,18 @@ mutable struct RandomHALBinaryClassifier <: MLJBase.Probabilistic
     nlambda::Int
     nfolds::Int
     nfeatures::Union{Int, Nothing}
-    sample_balance::Union{Float64, Nothing}
+    sampler_params::NamedTuple
 end
 
-RandomHALBinaryClassifier() = RandomHALBinaryClassifier(0, RHAL_DEFAULT_NLAMBDA, RHAL_DEFAULT_NFOLDS, nothing, nothing)
-RandomHALBinaryClassifier(nfeatures) = RandomHALBinaryClassifier(0, RHAL_DEFAULT_NLAMBDA, RHAL_DEFAULT_NFOLDS, nfeatures, nothing)
-RandomHALBinaryClassifier(smoothness, nfeatures) = RandomHALBinaryClassifier(smoothness, RHAL_DEFAULT_NLAMBDA, RHAL_DEFAULT_NFOLDS, nfeatures, nothing)
-RandomHALBinaryClassifier(smoothness, nfeatures, sample_balance) = RandomHALBinaryClassifier(smoothness, RHAL_DEFAULT_NLAMBDA, RHAL_DEFAULT_NFOLDS, nfeatures, sample_balance)
+RandomHALBinaryClassifier() = RandomHALBinaryClassifier(0, RHAL_DEFAULT_NLAMBDA, RHAL_DEFAULT_NFOLDS, nothing, NamedTuple())
+RandomHALBinaryClassifier(nfeatures) = RandomHALBinaryClassifier(0, RHAL_DEFAULT_NLAMBDA, RHAL_DEFAULT_NFOLDS, nfeatures, NamedTuple())
+RandomHALBinaryClassifier(smoothness, nfeatures) = RandomHALBinaryClassifier(smoothness, RHAL_DEFAULT_NLAMBDA, RHAL_DEFAULT_NFOLDS, nfeatures, NamedTuple())
+RandomHALBinaryClassifier(smoothness, nfeatures, sample_balance) = RandomHALBinaryClassifier(smoothness, RHAL_DEFAULT_NLAMBDA, RHAL_DEFAULT_NFOLDS, nfeatures, sampler_params)
 
 function MLJBase.fit(model::RandomHALBinaryClassifier, verbosity, X, y::Array{Bool, 1}, w = nothing)
-    params, lasso = fit_random_hal(X, [.!(y) y], Binomial(), model.smoothness, model.nfeatures, model.sample_balance, w; standardize = true, nlambda = model.nlambda, nfolds = model.nfolds)
+    n = length(y)
+    alpha = 1.0 - (1.0/sqrt(n))
+    params, lasso = fit_random_hal(X, [.!(y) y], Binomial(), model.smoothness, model.nfeatures, model.sampler_params, w; standardize = true, nlambda = model.nlambda, nfolds = model.nfolds, alpha = alpha)
     fitresult = (params = params,)
 
     cache = nothing
