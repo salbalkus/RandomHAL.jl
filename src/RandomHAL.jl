@@ -25,7 +25,7 @@ module RandomHAL
     include("randomhal_mlj_interface.jl")
     export RandomHALRegressor, RandomHALBinaryClassifier
 
-    include("balancing.jl")
+    include("riesz.jl")
 
     export fit, predict
 end

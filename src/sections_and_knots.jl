@@ -15,6 +15,7 @@ end
 
 # Helper function to extract the sections and knots selected by a LASSO fit on the matrix version of the basis
 function get_sections_and_knots(X, nonzero_indices, all_possible_sections, term_lengths)
+    n = nrow(X)
     coltypes = Tables.schema(X).types # Get type of each variable
     # List all possible interactions of variables
     sections = Vector{Vector{Int}}(undef, length(nonzero_indices))
@@ -24,7 +25,11 @@ function get_sections_and_knots(X, nonzero_indices, all_possible_sections, term_
     cur_basis_index = 1
     prev_basis_bound = 0 
     cur_basis_bound = term_lengths[1] # Keeps track of which "block" of the basis we are in
-    cur_section, state = iterate(all_possible_sections)
+    section_tracker = 1:length(all_possible_sections)
+    cur_section_i, state = iterate(section_tracker)
+
+    # Store the binary interaction terms in order to facilitate filtering out duplicate columns skipped previously
+    binary_interaction = [any(coltypes[section] .== Bool) ? findall(prod(X[i] for i in section[findall(coltypes[section] .== Bool)])) : (1:n) for section in all_possible_sections]
 
     # Iterate through all nonzero basis coefficients to extract sections and knots
     for (i, nz) in enumerate(nonzero_indices)
@@ -33,15 +38,16 @@ function get_sections_and_knots(X, nonzero_indices, all_possible_sections, term_
             cur_basis_index += 1
             prev_basis_bound = cur_basis_bound
             cur_basis_bound += term_lengths[cur_basis_index]
-            cur_section, state = iterate(all_possible_sections, state)
+            cur_section_i, state = iterate(section_tracker, state)
         end
 
         # Reverse engineer the sections and knots from the basis function
-        sections[i] = cur_section
-        knot_index = nz - prev_basis_bound
+        sections[i] = all_possible_sections[cur_section_i]
 
-        #knots[i] = [coltypes[s] == Bool ? true : Tables.getcolumn(X, s)[knot_index] for s in cur_section]
-        knots[i] = [Tables.getcolumn(X, s)[knot_index] for s in cur_section]
+        # For interactions with binary variables, need to filter out the zeroes
+        knot_index_before_filter = nz - prev_basis_bound
+        knot_index = binary_interaction[cur_section_i][knot_index_before_filter]
+        knots[i] = [Tables.getcolumn(X, s)[knot_index] for s in sections[i]]
     end
 
     return sections, knots

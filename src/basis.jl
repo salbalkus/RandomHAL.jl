@@ -1,5 +1,32 @@
-basis_function(Xcol::AbstractVector{<:Real}) = Xcol .>= transpose(Xcol)
-basis_function(Xcol::AbstractVector{<:Real}, smoothness::Int) = basis_function(Xcol) .* (Xcol .- transpose(Xcol)).^smoothness ./ factorial(smoothness)
+basis_function(Xcol1::AbstractVector{<:Real}, Xcol2::AbstractVector{<:Real}) = Xcol1 .>= transpose(Xcol2)
+basis_function(Xcol1::AbstractVector{<:Real}, Xcol2::AbstractVector{<:Real}, smoothness::Int) = basis_function(Xcol1, Xcol2) .* (Xcol1 .- transpose(Xcol2)).^smoothness ./ factorial(smoothness)
+
+function remove_duplicates(X1, X2, terms, coltypes, sections)
+    output = Vector{AbstractMatrix}(undef, length(terms))
+    # Check which columns are binary and select only the columns from above using the interaction
+    # If all are binary, replace with the interaction
+    for (i, section) in enumerate(sections)
+        bools = [c == Bool for c in coltypes[section]]
+
+        # If there are Bool columns, then we need to cull duplicate columns
+        if any(bools)
+            # In the case where every column is Bool, we only need to keep the single interaction between them
+            if all(bools)
+                binary_interaction = prod(X1[i] for i in section[bools])
+                output[i] = reshape(binary_interaction, nrow(X1), 1)
+            # If some are not Bool, the basis block will contain duplicates from lower orders, 
+            # except in columns where all of the Bool columns interact
+            else
+                binary_interaction = prod(X2[i] for i in section[bools])
+                output[i] = terms[i][:, binary_interaction]
+            end
+        # If the section doesn't contain any Bool, no duplicate columns need be culled
+        else
+            output[i] = terms[i]
+        end
+    end
+    return output
+end
 
 function interact(x_next::T, x::Vector{T}, next_section::Int, sections::Vector{Vector{Int}}, limit::Int) where T <: AbstractMatrix
     # Store the interactions and their orders, so we know when to stop
@@ -31,24 +58,33 @@ function all_interactions(main_terms::Vector{T}, limit::Int) where T <: Abstract
     return combined_interactions_and_main, sections
 end
 
-function ha_basis_matrix(X::Tables.Columns, smoothness::Int; interaction_limit = nothing)
+function ha_basis_matrix(X1::Tables.Columns, X2::Tables.Columns, smoothness::Int; interaction_limit = nothing)
     # Get the type of each column in the data
-    coltypes = Tables.schema(X).types
+    coltypes = Tables.schema(X1).types
+
+    # Table checking
+    if coltypes != Tables.schema(X2).types
+        error("Tables X1 and X2 must have same number of columns and same column types")
+    end
 
     # Set the highest order of interaction to the maximum if not specified
     if isnothing(interaction_limit)
-        interaction_limit = length(X)
+        interaction_limit = length(X1)
     end
     
     main_terms = (smoothness == 0) ? 
-        [basis_function(X[i]) for i in 1:length(X)] :
-        [coltypes[i] == Bool ? Matrix{Float64}(basis_function(X[i])) : basis_function(X[i], smoothness) for i in 1:length(X)]
+        [basis_function(X1[i], X2[i]) for i in 1:length(X1)] :
+        [coltypes[i] == Bool ? Matrix{Float64}(basis_function(X1[i], X2[i])) : basis_function(X1[i], X2[i], smoothness) for i in 1:length(X1)]
     
     main_terms_and_interactions, all_sections = all_interactions(main_terms, interaction_limit)
+    main_terms_and_interactions = remove_duplicates(X1, X2, main_terms_and_interactions, coltypes, all_sections)
     term_lengths = size.(main_terms_and_interactions, 2)
 
     return reduce(hcat, main_terms_and_interactions), all_sections, term_lengths
 end
+
+ha_basis_matrix(X::Tables.Columns, smoothness::Int; interaction_limit = nothing) = ha_basis_matrix(X, X, smoothness; interaction_limit = interaction_limit)
+
 
 function ha_basis_matrix(X::Tables.Columns, sections, knots, smoothness::Int)
     coltypes = Tables.schema(X).types
