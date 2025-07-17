@@ -21,8 +21,8 @@ HALRiesz(smoothness, nlambda, nfolds) = HALRiesz(smoothness, nlambda, nfolds, HA
 
 function MLJBase.fit(model::HALRiesz, verbosity, X, X_shift, w = nothing)
     
-    basis = ha_basis_matrix(X, model.smoothness)
-    basis_shift = ha_basis_matrix(X_shift, X, model.smoothness)
+    basis, all_sections, term_lengths = ha_basis_matrix(X, model.smoothness)
+    basis_shift, all_sections_shift, term_lengths_shift = ha_basis_matrix(X_shift, X, model.smoothness)
 
     β, β0, total_λ_range = cross_coord_descent(basis, basis_shift, λ = nothing, α = 1.0, min_λ_ε = model.min_λ_ε, λ_grid_length = model.nlambda, max_iters = model.max_iters, tol = model.tol)
 
@@ -32,4 +32,4 @@ function MLJBase.fit(model::HALRiesz, verbosity, X, X_shift, w = nothing)
     return fitresult, cache, report
 end
 
-MLJBase.predict(model::HALRegressor, fitresult, Χ) = (Tables.matrix(Χ) * fitresult.β) .+ β0
+MLJBase.predict(model::HALRiesz, fitresult, Χ) = (Tables.matrix(Χ) * fitresult.β) .+ β0

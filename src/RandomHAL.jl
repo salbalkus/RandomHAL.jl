@@ -9,6 +9,7 @@ module RandomHAL
     using GLMNet
     using MLJBase
     using InvertedIndices
+    using LinearAlgebra
 
     include("basis.jl")
     export ha_basis_matrix
@@ -26,6 +27,8 @@ module RandomHAL
     export RandomHALRegressor, RandomHALBinaryClassifier
 
     include("riesz.jl")
+    include("rieszhal_mlj_interface.jl")
+    export HALRiesz
 
     export fit, predict
 end
