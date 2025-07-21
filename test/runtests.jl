@@ -64,7 +64,7 @@ end
     @test length.(sections_r) == length.(knots_r)
 end
 
-@testset "Model Fitting" begin
+#@testset "Model Fitting" begin
 
     cttest = rand(scm, n)
     Xtest = responseparents(cttest)
@@ -118,7 +118,6 @@ end
 
 riesz_loss(X::AbstractMatrix, mean_shift::AbstractVector, β::AbstractVector) = mean((X * β).^2) - 2 * dot(mean_shift, β)
 
-
 # Cross-fitting functions
 function evenly_spaced_grid(n, nfolds)
     leftover = n % nfolds
@@ -137,22 +136,6 @@ function train_test_folds(input_indices, nfolds)
     return train_folds, test_folds
 end
 
-soft_threshold(z, λ) = sign(z) * max(0, abs(z) - λ)
-
-# TODO: Speed this up by precomputing the entire covariance matrix Z'Z
-# so that covariance betweeen Z values is not re-computed multiple times
-# Perform a single update of one coordinate in the descent algorithm
-
-
-function update_coef(i, β, ZZ, mean_shift, λ, α, n)
-    # Compute the squared penalty of the Riesz representer
-    square_penalty = sum(ZZ[i, :] .* β)
-
-    # Update ith coefficient using closed-form lasso coordinate for Riesz representer
-    β_next = soft_threshold(mean_shift[i] - square_penalty, α * λ) / (1 + (1 - α) * λ)
-    return β_next
-end
-
 model = HALRiesz()
 X = Tables.Columns(responseparents(ct))
 X_shift = Tables.Columns(intervene(responseparents(ct), treat_all))
@@ -162,6 +145,19 @@ basis_shift, all_sections_shift, term_lengths_shift = ha_basis_matrix(X_shift, X
 
 X = basis
 X_shift = basis_shift
+
+soft_threshold(z, λ) = sign(z) * max(0, abs(z) - λ)
+
+function update_coef(β::AbstractVector, col::AbstractVector, mean_shift::Real, λ::Float64, α::Float64)
+    # Update ith coefficient using closed-form lasso coordinate for Riesz representer
+    return soft_threshold(mean_shift - dot(col, β), α * λ) / (1 + (1 - α) * λ)
+end
+
+function cycle_coord(β_next, cols, mean_shift, λ, α)
+    for (i, c) in enumerate(cols)
+        β_next[i] = update_coef(β_next, c, mean_shift[i], λ, α)
+    end
+end
 
 function coord_descent(X, X_shift; λ = nothing, α = 1.0, min_λ_ε = 0.01, λ_grid_length = 100, outer_max_iters = 20, inner_max_iters = 20, tol = 0.01)
     # Initialize variables
@@ -181,6 +177,7 @@ function coord_descent(X, X_shift; λ = nothing, α = 1.0, min_λ_ε = 0.01, λ_
 
     ZZbyn = transpose(Z) * Z ./ n
     ZZbyn[diagind(ZZbyn)] .= 0
+    cols = eachcol(ZZbyn)
 
     # If λ is unspecified, automatically construct a grid.
     # We choose λ_max as the smallest value of λ that will guarantee 
@@ -210,16 +207,12 @@ function coord_descent(X, X_shift; λ = nothing, α = 1.0, min_λ_ε = 0.01, λ_
         norm_next = tol .+ 1.0
         outer_iteration = 1
         # Run an initial update
-        for i in 1:d
-            β_next[i] = update_coef(i, β_next, ZZbyn, mean_shift, λ, α, n)
-        end
+        cycle_coord(β_next, cols, mean_shift, λ, α)
         prev_riesz_loss = riesz_loss(Z, mean_shift, β[λ_index])
 
         while (outer_iteration < outer_max_iters)
             # Initial full set iteration. Iterate through each coordinate cyclically
-            for i in 1:d
-                β_next[i] = update_coef(i, β_next, ZZbyn, mean_shift, λ, α, n)
-            end
+            cycle_coord(β_next, cols, mean_shift, λ, α)
 
             # Update the active set
             next_active_set = findall(β_next .!= 0)
@@ -238,9 +231,7 @@ function coord_descent(X, X_shift; λ = nothing, α = 1.0, min_λ_ε = 0.01, λ_
             while (inner_iteration < inner_max_iters) && (norm_next > tol)
 
                 # Repeat initial loop twice
-                for i in active_set
-                    β_next[i] = update_coef(i, β_next, ZZbyn, mean_shift, λ, α, n)
-                end
+                cycle_coord(β_next, cols, mean_shift, λ, α)
                 
                 # Update the norm to track convergence
                 next_riesz_loss = riesz_loss(Z, mean_shift, β_next)
@@ -267,6 +258,8 @@ function coord_descent(X, X_shift; λ = nothing, α = 1.0, min_λ_ε = 0.01, λ_
 end
 
 @time coord_descent(X, X_shift)
+
+β_orig, β0 = coord_descent(X, X_shift)
 
     ipws = mean((X * β_orig .+ β0).*y, dims = 1)
     truth = cfmean(scm, treat_all)
