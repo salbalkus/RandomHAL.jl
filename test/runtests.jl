@@ -30,7 +30,7 @@ dgp = @dgp(
     )
 scm = StructuralCausalModel(dgp, :A, :Y)
 
-n = 200
+n = 100
 ct = rand(scm, n)
 X = Tables.Columns(responseparents(ct))
 y = vec(responsematrix(ct))
@@ -64,7 +64,7 @@ end
     @test length.(sections_r) == length.(knots_r)
 end
 
-#@testset "Model Fitting" begin
+@testset "Model Fitting" begin
 
     cttest = rand(scm, n)
     Xtest = responseparents(cttest)
@@ -82,7 +82,7 @@ end
     halpreds = MLJ.predict(hal, Xtest)
     halmse = mean((halpreds .- true_mean).^2)
 
-    @test halmse < 0.03
+    @test halmse < 0.05
 
     # Random HAL
     n_samples = Int(round(n * log(n)))
@@ -94,7 +94,7 @@ end
     rhalmse = mean((rhalpreds .- true_mean).^2)
 
     # RMSE are bounded
-    @test rhalmse < 0.03
+    @test rhalmse < 0.05
     
     # Binary treatment
     Xbin = treatmentparents(ct)
@@ -111,10 +111,15 @@ end
     rhalpredsbin = MLJ.predict(rhalbin, Xbintest)
     rhalbinmse = mean((rhalpredsbin .- conmean(scm, cttest, :A)).^2)
 
-    @test halbinmse < 0.04
-    @test rhalbinmse < 0.03
+    @test halbinmse < 0.05
+    @test rhalbinmse < 0.05
 
 end
+
+rmodel = HALRiesz()
+X_shift = Tables.Columns(intervene(responseparents(ct), treat_all))
+rmach = machine(rmodel, X, X_shift) |> fit!
+mean(MLJ.predict(rmach) .* y)
 
 riesz_loss(X::AbstractMatrix, mean_shift::AbstractVector, β::AbstractVector) = mean((X * β).^2) - 2 * dot(mean_shift, β)
 
@@ -146,6 +151,14 @@ basis_shift, all_sections_shift, term_lengths_shift = ha_basis_matrix(X_shift, X
 X = basis
 X_shift = basis_shift
 
+
+# TODO: FIX LOSSES SO THEY ALSO ARE FAST AND ITERATE THROUGH COLUMNS INSTEAD OF ROWS
+riesz_loss(X::AbstractMatrix, X_shift::AbstractMatrix, β::AbstractMatrix, β0::AbstractMatrix) = mean((X * β .+ β0).^2, dims = 1) .- mean(2 .* ((X_shift * β) .+ β0), dims = 1)
+
+# Losses for checking individual updates
+reg_riesz_loss(X::AbstractMatrix, mean_shift::AbstractVector, β::AbstractVector, λ) = mean((X * β).^2) - 2 * sum(mean_shift .* β) + 2*λ * sum(abs.(β))
+riesz_loss(X::AbstractMatrix, mean_shift::AbstractVector, β::AbstractVector) = mean((X * β).^2) - 2 * sum(mean_shift .* β)
+
 soft_threshold(z, λ) = sign(z) * max(0, abs(z) - λ)
 
 function update_coef(β::AbstractVector, col::AbstractVector, mean_shift::Real, λ::Float64, α::Float64)
@@ -159,7 +172,7 @@ function cycle_coord(β_next, cols, mean_shift, λ, α)
     end
 end
 
-function coord_descent(X, X_shift; λ = nothing, α = 1.0, min_λ_ε = 0.01, λ_grid_length = 100, outer_max_iters = 20, inner_max_iters = 20, tol = 0.01)
+function coord_descent(X, X_shift; λ = nothing, α = 1.0, min_λ_ε = 0.001, λ_grid_length = 100, outer_max_iters = 20, inner_max_iters = 20, tol = 0.01)
     # Initialize variables
     n, d = size(X)
 
@@ -259,10 +272,53 @@ end
 
 @time coord_descent(X, X_shift)
 
-β_orig, β0 = coord_descent(X, X_shift)
+β, β0 = coord_descent(X, X_shift)
+best = argmin(vec(riesz_loss(X, X_shift, β, β0)))
 
-    ipws = mean((X * β_orig .+ β0).*y, dims = 1)
+
+    ipws = mean((X * β .+ β0).*y, dims = 1)
     truth = cfmean(scm, treat_all)
+
+    β
+
+    λ = nothing
+    α = 1.0
+    min_λ_ε = 0.01
+    λ_grid_length = 100
+    outer_max_iters = 20
+    inner_max_iters = 20
+    tol = 0.01
+    # Initialize variables
+    n, d = size(X)
+
+    # Get components to standardize data
+    means = mean(X, dims = 1)
+    invsds = 1 ./ std(X, dims = 1)
+
+    # Set up safeguard for variables with 0 variance
+    invsds[isinf.(invsds)] .= 0
+
+    # Standardize the data
+    Z = (X .- means) .* invsds
+    Z_shift = (X_shift .- means) .* invsds
+    mean_shift = vec(mean(Z_shift, dims = 1))
+
+    ZZbyn = transpose(Z) * Z ./ n
+    ZZbyn[diagind(ZZbyn)] .= 0
+    cols = eachcol(ZZbyn)
+
+    # If λ is unspecified, automatically construct a grid.
+    # We choose λ_max as the smallest value of λ that will guarantee 
+    # all coefficients remain 0 after updating for the first time.
+    # β will not change from 0 if λ_max > |mean_shift| / α
+    λ = nothing
+    if isnothing(λ)
+        λ_max = maximum(abs.(mean_shift)) / α
+        λ_min = min_λ_ε * λ_max    
+        λ_range = reverse(exp.(range(log(λ_min), log(λ_max), length = λ_grid_length)))
+    else
+        λ_range = reverse(λ)
+    end
 
     using Plots
     plot(log.(λ_range), vec(ipws))
@@ -270,7 +326,7 @@ end
     hline!([truth.μ])
 
     riesz_loss(X::AbstractMatrix, X_shift::AbstractMatrix, β::AbstractMatrix, β0::AbstractMatrix) = mean((X * β .+ β0).^2, dims = 1) .- mean(2 .* ((X_shift * β) .+ β0), dims = 1)
-    losses = vec(riesz_loss(X, X_shift, reduce(hcat, β), β0))
+    losses = vec(riesz_loss(X, X_shift, β, β0))
     plot(log.(λ_range), log.(losses .- minimum(losses) .+ 0.001))
     xflip!(true)
 

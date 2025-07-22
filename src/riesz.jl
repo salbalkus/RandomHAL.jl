@@ -1,3 +1,5 @@
+
+# TODO: FIX LOSSES SO THEY ALSO ARE FAST AND ITERATE THROUGH COLUMNS INSTEAD OF ROWS
 riesz_loss(X::AbstractMatrix, X_shift::AbstractMatrix, β::AbstractMatrix, β0::AbstractMatrix) = mean((X * β .+ β0).^2, dims = 1) .- mean(2 .* ((X_shift * β) .+ β0), dims = 1)
 
 # Losses for checking individual updates
@@ -133,7 +135,7 @@ function coord_descent(X, X_shift; λ = nothing, α = 1.0, min_λ_ε = 0.01, λ_
     return β_orig, β0
 end
 
-function cross_coord_descent(X, X_shift; λ = nothing, α = 1.0, nfolds = 5, min_λ_ε = 0.001, λ_grid_length = 100, max_iters = 1000, tol = 0.0, only_refit_best = true)
+function cross_coord_descent(X, X_shift; nfolds = 5, λ = nothing, α = 1.0, min_λ_ε = 0.01, λ_grid_length = 100, outer_max_iters = 20, inner_max_iters = 20, tol = 0.01, only_refit_best = true)
     # Get components to standardize data to select initial lambda grid
     n, d = size(X)
     means = mean(X, dims = 1)
@@ -167,7 +169,7 @@ function cross_coord_descent(X, X_shift; λ = nothing, α = 1.0, nfolds = 5, min
     for fold in 1:nfolds
         X_train = view(X, train[fold], :)
         X_shift_train = view(X_shift, train[fold], :)
-        βs[fold], β0s[fold] = coord_descent(X_train, X_shift_train; λ = λ_range, α = α, max_iters = max_iters, tol = tol)
+        βs[fold], β0s[fold] = coord_descent(X_train, X_shift_train; λ = λ_range, α = α, outer_max_iters = outer_max_iters, inner_max_iters = inner_max_iters, tol = tol)
         
         X_test = view(X, test[fold], :)
         X_shift_test = view(X_shift, test[fold], :)
@@ -178,7 +180,18 @@ function cross_coord_descent(X, X_shift; λ = nothing, α = 1.0, nfolds = 5, min
     best_λ_index = argmin(vec(mean_mse))
 
     total_λ_range = only_refit_best ? λ_range[best_λ_index] : λ_range
-    β, β0 = coord_descent(X, X_shift; λ = total_λ_range, α = α, max_iters = max_iters, tol = tol)
+    β, β0 = coord_descent(X, X_shift; λ = total_λ_range, α = α, outer_max_iters = outer_max_iters, inner_max_iters = inner_max_iters, tol = tol)
 
     return β, β0, total_λ_range
+end
+
+# Get predictions from a set of fitted HAL parameters and new data
+function predict_rieszhal(params::HALParameters, Xnew)
+    x = Tables.Columns(Xnew)
+    if(length(params.β) > 0)
+        basis = ha_basis_matrix(x, params.sections, params.knots, params.smoothness)
+        return (basis * params.β) .+ params.β0
+    else
+        return params.β0 .* ones(nrow(x))
+    end
 end

@@ -27,6 +27,7 @@ module RandomHAL
     export RandomHALRegressor, RandomHALBinaryClassifier
 
     include("riesz.jl")
+    export coord_descent, cross_coord_descent, predict_rieszhal
     include("rieszhal_mlj_interface.jl")
     export HALRiesz
 
