@@ -4,8 +4,12 @@ riesz_loss(X::AbstractMatrix, X_shift::AbstractMatrix, β::AbstractMatrix, β0::
 
 # Losses for checking individual updates
 reg_riesz_loss(X::AbstractMatrix, mean_shift::AbstractVector, β::AbstractVector, λ) = mean((X * β).^2) - 2 * sum(mean_shift .* β) + 2*λ * sum(abs.(β))
-riesz_loss(X::AbstractMatrix, mean_shift::AbstractVector, β::AbstractVector) = mean((X * β).^2) - 2 * sum(mean_shift .* β)
 
+# Optimized Riesz Loss
+function riesz_loss(X::AbstractMatrix, mean_shift::AbstractVector, β::AbstractVector)
+    pred = X * β
+    return dot(pred, pred)/size(X, 1) - 2 * dot(mean_shift, β)
+end
 # Cross-fitting functions
 function evenly_spaced_grid(n, nfolds)
     leftover = n % nfolds

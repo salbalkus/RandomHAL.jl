@@ -151,6 +151,110 @@ basis_shift, all_sections_shift, term_lengths_shift = ha_basis_matrix(X_shift, X
 X = basis
 X_shift = basis_shift
 
+# Initialize variables
+    n, d = size(X)
+
+    # Get components to standardize data
+    means = mean(X, dims = 1)
+    invsds = 1 ./ std(X, dims = 1)
+
+    # Set up safeguard for variables with 0 variance
+    invsds[isinf.(invsds)] .= 0
+
+    # Standardize the data
+    Z = (X .- means) .* invsds
+    Z_shift = (X_shift .- means) .* invsds
+    mean_shift = vec(mean(Z_shift, dims = 1))
+
+    ZZbyn = transpose(Z) * Z ./ n
+    ZZbyn[diagind(ZZbyn)] .= 0
+    cols = eachcol(ZZbyn)
+
+    # If λ is unspecified, automatically construct a grid.
+    # We choose λ_max as the smallest value of λ that will guarantee 
+    # all coefficients remain 0 after updating for the first time.
+    # β will not change from 0 if λ_max > |mean_shift| / α
+    α = 1.0
+    min_λ_ε = 0.001
+    λ_grid_length = 100
+    λ = nothing
+    if isnothing(λ)
+        λ_max = maximum(abs.(mean_shift)) / α
+        λ_min = min_λ_ε * λ_max    
+        λ_range = reverse(exp.(range(log(λ_min), log(λ_max), length = λ_grid_length)))
+    else
+        λ_range = reverse(λ)
+    end
+
+    # Set up storage for coefficients
+    λ_length = length(λ_range)
+    β = Vector{Vector{<:Real}}(undef, λ_length)
+    β_prev = zeros(d)
+    β_next = zeros(d)
+    function riesz_loss(X::AbstractMatrix, mean_shift::AbstractVector, β::AbstractVector)
+        pred = (X * β)
+        return dot(pred, pred)/size(X, 1) - 2 * dot(mean_shift, β)
+    end
+
+    pct_change(next_loss, prev_loss) = abs(next_loss - prev_loss) / prev_loss
+
+    # We loop through λ in the outer loop to take advantage of warm starts
+    for (λ_index, λ) in enumerate(λ_range)
+        # First, cycle through all variables to determine the active set
+        # Then, iterate on the active set until convergence
+        # Finally, repeat on the entire set of variables. If nothing changes, done!
+        # Otherwise, update the active set and repeat 
+        active_set = []
+        norm_next = tol .+ 1.0
+        outer_iteration = 1
+        # Run an initial update
+        cycle_coord(β_next, cols, mean_shift, λ, α)
+        prev_riesz_loss = riesz_loss(Z, mean_shift, β[λ_index])
+
+        while (outer_iteration < outer_max_iters)
+            # Initial full set iteration. Iterate through each coordinate cyclically
+            cycle_coord(β_next, cols, mean_shift, λ, α)
+
+            # Update the active set
+            next_active_set = findall(β_next .!= 0)
+            
+            # Update the norm to track convergence
+            next_riesz_loss = riesz_loss(Z, mean_shift, β_next)
+            norm_next = pct_change(next_loss, prev_loss)
+            prev_riesz_loss = next_riesz_loss
+
+            # If the active set has not changed, then we're done. Otherwise, keep going
+            active_set == next_active_set && break
+            active_set = next_active_set
+
+            # Update active set until convergence
+            inner_iteration = 1
+            while (inner_iteration < inner_max_iters) && (norm_next > tol)
+
+                # Repeat initial loop twice
+                cycle_coord(β_next, cols, mean_shift, λ, α)
+                
+                # Update the norm to track convergence
+                next_riesz_loss = riesz_loss(Z, mean_shift, β_next)
+                norm_next = pct_change(next_riesz_loss, prev_riesz_loss)
+                prev_riesz_loss = next_riesz_loss
+
+                β_prev = β_next
+                inner_iteration += 1
+            end
+            outer_iteration += 1
+        end
+    end
+
+    # Reconstruct coefficients to be on the original scale
+    β_orig = reduce(hcat, β)
+    β_orig = β_orig .* transpose(invsds)
+
+    # Finally, add the intercept.
+    # This intercept, when scaled by y, accounts for the fact 
+    # that when the β are rescaled, they no longer sum to 1. 
+    β0 = 1 .- mean(X * β_orig, dims = 1)
+
 
 # TODO: FIX LOSSES SO THEY ALSO ARE FAST AND ITERATE THROUGH COLUMNS INSTEAD OF ROWS
 riesz_loss(X::AbstractMatrix, X_shift::AbstractMatrix, β::AbstractMatrix, β0::AbstractMatrix) = mean((X * β .+ β0).^2, dims = 1) .- mean(2 .* ((X_shift * β) .+ β0), dims = 1)
@@ -207,7 +311,7 @@ function coord_descent(X, X_shift; λ = nothing, α = 1.0, min_λ_ε = 0.001, λ
 
     # Set up storage for coefficients
     λ_length = length(λ_range)
-    β = fill(zeros(d), λ_length)
+    β = Vector{Vector{<:Real}}(undef, λ_length)
     β_next = zeros(d)
 
     # We loop through λ in the outer loop to take advantage of warm starts
@@ -221,7 +325,7 @@ function coord_descent(X, X_shift; λ = nothing, α = 1.0, min_λ_ε = 0.001, λ
         outer_iteration = 1
         # Run an initial update
         cycle_coord(β_next, cols, mean_shift, λ, α)
-        prev_riesz_loss = riesz_loss(Z, mean_shift, β[λ_index])
+        prev_riesz_loss = riesz_loss(Z, mean_shift, β_next)
 
         while (outer_iteration < outer_max_iters)
             # Initial full set iteration. Iterate through each coordinate cyclically
@@ -232,7 +336,7 @@ function coord_descent(X, X_shift; λ = nothing, α = 1.0, min_λ_ε = 0.001, λ
             
             # Update the norm to track convergence
             next_riesz_loss = riesz_loss(Z, mean_shift, β_next)
-            norm_next = abs((next_riesz_loss - prev_riesz_loss) / prev_riesz_loss)
+            norm_next = pct_change(next_riesz_loss, prev_riesz_loss)
             prev_riesz_loss = next_riesz_loss
 
             # If the active set has not changed, then we're done. Otherwise, keep going
@@ -248,14 +352,13 @@ function coord_descent(X, X_shift; λ = nothing, α = 1.0, min_λ_ε = 0.001, λ
                 
                 # Update the norm to track convergence
                 next_riesz_loss = riesz_loss(Z, mean_shift, β_next)
-                norm_next = abs((next_riesz_loss - prev_riesz_loss) / prev_riesz_loss)
+                norm_next = pct_change(next_riesz_loss, prev_riesz_loss)
                 prev_riesz_loss = next_riesz_loss
-
-                β[λ_index] = copy(β_next)
                 inner_iteration += 1
             end
             outer_iteration += 1
         end
+        β[λ_index] = copy(β_next)
     end
 
     # Reconstruct coefficients to be on the original scale
