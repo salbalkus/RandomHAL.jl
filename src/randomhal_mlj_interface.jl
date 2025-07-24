@@ -17,7 +17,7 @@ RandomHALRegressor(smoothness, nfeatures, sampler_params) = RandomHALRegressor(s
 
 function MLJBase.fit(model::RandomHALRegressor, verbosity, X, y, w = nothing)
     n = length(y)
-    alpha = 1.0 - (1.0/sqrt(n))
+    alpha = 1.0# - (1.0/sqrt(n))
     params, lasso = fit_random_hal(X, y, Normal(), model.smoothness, model.nfeatures, model.sampler_params, w; standardize = true, nlambda = model.nlambda, nfolds = model.nfolds, alpha = alpha)
     fitresult = (params = params,)
     cache = nothing

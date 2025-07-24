@@ -8,6 +8,8 @@ using StatsBase
 using LinearAlgebra
 import LogExpFunctions: logistic
 
+using Profile
+
 using Tables
 import Combinatorics: powerset
 
@@ -30,7 +32,7 @@ dgp = @dgp(
     )
 scm = StructuralCausalModel(dgp, :A, :Y)
 
-n = 100
+n = 900
 ct = rand(scm, n)
 X = Tables.Columns(responseparents(ct))
 y = vec(responsematrix(ct))
@@ -116,41 +118,88 @@ end
 
 end
 
-rmodel = HALRiesz()
-X_shift = Tables.Columns(intervene(responseparents(ct), treat_all))
-rmach = machine(rmodel, X, X_shift) |> fit!
-mean(MLJ.predict(rmach) .* y)
+@testset "Riesz Models" begin
 
-riesz_loss(X::AbstractMatrix, mean_shift::AbstractVector, β::AbstractVector) = mean((X * β).^2) - 2 * dot(mean_shift, β)
+    X_shift = intervene(responseparents(ct), treat_all)
+    truth = cfmean(scm, treat_all)
 
-# Cross-fitting functions
-function evenly_spaced_grid(n, nfolds)
-    leftover = n % nfolds
-    output = fill(n ÷ nfolds, nfolds)
-    output[1:leftover] .+= 1
-    return cumsum(output)
+
+    rmodel1 = HALRiesz()
+    @time rmach1 = machine(rmodel1, X, X_shift) |> fit!
+    w1 = MLJ.predict(rmach1) 
+    ipw1 = mean(w1 .* y)
+
+    @test abs(ipw1 - truth.μ) < 0.05
+
+    rmodel2 = RandomHALRiesz()
+    @time rmach2 = machine(rmodel2, X, X_shift) |> fit!
+    w2 = MLJ.predict(rmach2)
+    ipw2 = mean(w2 .* y)
+
+    @test abs(ipw2 - truth.μ) < 0.05
+
 end
 
-function train_test_folds(input_indices, nfolds)
-    n = length(input_indices)
-    ind = shuffle(input_indices)
-    end_points  = evenly_spaced_grid(n, nfolds)
-    start_points = vcat([1], end_points[1:(nfolds-1)] .+ 1)
-    test_folds = [ind[start_points[i]:end_points[i]] for i in 1:nfolds]
-    train_folds = [reduce(vcat, test_folds[Not(i)]) for i in 1:nfolds]
-    return train_folds, test_folds
+
+
+# TODO: FIX LOSSES SO THEY ALSO ARE FAST AND ITERATE THROUGH COLUMNS INSTEAD OF ROWS
+riesz_loss(X::AbstractMatrix, X_shift::AbstractMatrix, β, β0) = mean((X * β .+ β0).^2, dims = 1) .- mean(2 .* ((X_shift * β) .+ β0), dims = 1)
+
+# Losses for checking individual updates
+reg_riesz_loss(X::AbstractMatrix, mean_shift::AbstractVector, β::AbstractVector, λ) = mean((X * β).^2) - 2 * sum(mean_shift .* β) + 2*λ * sum(abs.(β))
+
+function riesz_loss(X::AbstractMatrix, mean_shift::Vector{Float64}, β::Vector{Float64})
+    pred = X * β
+    return dot(pred, pred)/size(X, 1) - 2 * dot(mean_shift, β)
 end
 
-model = HALRiesz()
-X = Tables.Columns(responseparents(ct))
-X_shift = Tables.Columns(intervene(responseparents(ct), treat_all))
+@time riesz_loss(X, mean_shift, β1)
+@time riesz_loss_active(X, mean_shift, β1, active_set)
 
-basis, all_sections, term_lengths = ha_basis_matrix(X, model.smoothness)
-basis_shift, all_sections_shift, term_lengths_shift = ha_basis_matrix(X_shift, X, model.smoothness)
 
-X = basis
-X_shift = basis_shift
+soft_threshold(z::Float64, λ::Float64) = sign(z) * max(0, abs(z) - λ)
 
+pct_change(next_loss::Float64, prev_loss::Float64) = abs(next_loss - prev_loss) / prev_loss
+
+function cycle_coord!(β::Vector{Float64}, cols, mean_shift::Vector{Float64}, λ::Float64)
+    @inbounds for (i, col) in enumerate(cols)
+        β[i] = soft_threshold(mean_shift[i] - dot(col, β), λ)
+    end
+end
+
+function cycle_coord_inactive!(β::Vector{Float64}, cols, mean_shift::Vector{Float64}, λ::Float64, inactive_set)
+    @inbounds for i in inactive_set
+        β[i] = soft_threshold(mean_shift[i] - dot(cols[i], β), λ)
+    end
+end
+
+function cycle_coord_active!(β::Vector{Float64}, cols, mean_shift::Vector{Float64}, λ::Float64, active_set)
+    @inbounds for i in active_set
+        penalty = mean_shift[i]
+        cur_col = cols[i]
+        @simd for j in active_set
+            penalty -= cur_col[j] * β[j]
+        end
+        β[i] = soft_threshold(penalty, λ)
+    end    
+end
+
+β1 = zeros(size(X, 2))
+β2 = zeros(size(X, 2))
+β3 = zeros(size(X, 2))
+
+cols = eachcol(ZZbyn)
+active_set = sample(1:d, 500)
+
+@time cycle_coord!(β1, cols, mean_shift, 0.01)
+@time cycle_coord_active!(β2, cols, mean_shift, 0.01, active_set)
+@time cycle_coord_inactive!(β3, cols, mean_shift, 0.01, active_set)
+@time cycle_coord_active_arr!(β3, ZZbyn, mean_shift, 0.01, active_set)
+
+
+
+
+function coord_descent(X::AbstractMatrix, X_shift::AbstractMatrix; λ = nothing, min_λ_ε = 0.001, λ_grid_length = 20, outer_max_iters = 20, inner_max_iters = 50, tol = 0.0)
 # Initialize variables
     n, d = size(X)
 
@@ -174,12 +223,11 @@ X_shift = basis_shift
     # We choose λ_max as the smallest value of λ that will guarantee 
     # all coefficients remain 0 after updating for the first time.
     # β will not change from 0 if λ_max > |mean_shift| / α
-    α = 1.0
-    min_λ_ε = 0.001
-    λ_grid_length = 100
-    λ = nothing
+    #λ = nothing
+    #λ_grid_length = 100
+    #min_λ_ε = 0.001
     if isnothing(λ)
-        λ_max = maximum(abs.(mean_shift)) / α
+        λ_max = maximum(abs.(mean_shift))# / α
         λ_min = min_λ_ε * λ_max    
         λ_range = reverse(exp.(range(log(λ_min), log(λ_max), length = λ_grid_length)))
     else
@@ -188,99 +236,71 @@ X_shift = basis_shift
 
     # Set up storage for coefficients
     λ_length = length(λ_range)
-    β = Vector{Vector{<:Real}}(undef, λ_length)
-    β_prev = zeros(d)
+    β = Matrix(undef, d, λ_length)
     β_next = zeros(d)
-    function riesz_loss(X::AbstractMatrix, mean_shift::AbstractVector, β::AbstractVector)
-        pred = (X * β)
-        return dot(pred, pred)/size(X, 1) - 2 * dot(mean_shift, β)
-    end
-
-    pct_change(next_loss, prev_loss) = abs(next_loss - prev_loss) / prev_loss
 
     # We loop through λ in the outer loop to take advantage of warm starts
     for (λ_index, λ) in enumerate(λ_range)
+
         # First, cycle through all variables to determine the active set
         # Then, iterate on the active set until convergence
         # Finally, repeat on the entire set of variables. If nothing changes, done!
         # Otherwise, update the active set and repeat 
         active_set = []
+        inactive_set = 1:d
         norm_next = tol .+ 1.0
         outer_iteration = 1
         # Run an initial update
-        cycle_coord(β_next, cols, mean_shift, λ, α)
-        prev_riesz_loss = riesz_loss(Z, mean_shift, β[λ_index])
+        cycle_coord!(β_next, cols, mean_shift, λ)
+        prev_riesz_loss = riesz_loss(Z, mean_shift, β_next)
 
         while (outer_iteration < outer_max_iters)
             # Initial full set iteration. Iterate through each coordinate cyclically
-            cycle_coord(β_next, cols, mean_shift, λ, α)
+            cycle_coord_inactive!(β_next, cols, mean_shift, λ, inactive_set)
 
             # Update the active set
             next_active_set = findall(β_next .!= 0)
-            
-            # Update the norm to track convergence
-            next_riesz_loss = riesz_loss(Z, mean_shift, β_next)
-            norm_next = pct_change(next_loss, prev_loss)
-            prev_riesz_loss = next_riesz_loss
 
             # If the active set has not changed, then we're done. Otherwise, keep going
             active_set == next_active_set && break
             active_set = next_active_set
+            inactive_set = findall(β_next .== 0)
+
+            # Update the norm to track convergence
+            next_riesz_loss = riesz_loss(Z, mean_shift, β_next)
+            norm_next = pct_change(next_riesz_loss, prev_riesz_loss)
+            prev_riesz_loss = next_riesz_loss
 
             # Update active set until convergence
             inner_iteration = 1
             while (inner_iteration < inner_max_iters) && (norm_next > tol)
+                cycle_coord_active!(β_next, cols, mean_shift, λ, active_set)
 
-                # Repeat initial loop twice
-                cycle_coord(β_next, cols, mean_shift, λ, α)
-                
                 # Update the norm to track convergence
                 next_riesz_loss = riesz_loss(Z, mean_shift, β_next)
                 norm_next = pct_change(next_riesz_loss, prev_riesz_loss)
                 prev_riesz_loss = next_riesz_loss
-
-                β_prev = β_next
-                inner_iteration += 1
             end
             outer_iteration += 1
         end
+        β[:, λ_index] = β_next
     end
 
     # Reconstruct coefficients to be on the original scale
-    β_orig = reduce(hcat, β)
-    β_orig = β_orig .* transpose(invsds)
+    β = β .* transpose(invsds)
 
     # Finally, add the intercept.
     # This intercept, when scaled by y, accounts for the fact 
     # that when the β are rescaled, they no longer sum to 1. 
-    β0 = 1 .- mean(X * β_orig, dims = 1)
+    β0 = 1 .- vec(mean(X, dims = 1) * β)
 
-
-# TODO: FIX LOSSES SO THEY ALSO ARE FAST AND ITERATE THROUGH COLUMNS INSTEAD OF ROWS
-riesz_loss(X::AbstractMatrix, X_shift::AbstractMatrix, β::AbstractMatrix, β0::AbstractMatrix) = mean((X * β .+ β0).^2, dims = 1) .- mean(2 .* ((X_shift * β) .+ β0), dims = 1)
-
-# Losses for checking individual updates
-reg_riesz_loss(X::AbstractMatrix, mean_shift::AbstractVector, β::AbstractVector, λ) = mean((X * β).^2) - 2 * sum(mean_shift .* β) + 2*λ * sum(abs.(β))
-riesz_loss(X::AbstractMatrix, mean_shift::AbstractVector, β::AbstractVector) = mean((X * β).^2) - 2 * sum(mean_shift .* β)
-
-soft_threshold(z, λ) = sign(z) * max(0, abs(z) - λ)
-
-function update_coef(β::AbstractVector, col::AbstractVector, mean_shift::Real, λ::Float64, α::Float64)
-    # Update ith coefficient using closed-form lasso coordinate for Riesz representer
-    return soft_threshold(mean_shift - dot(col, β), α * λ) / (1 + (1 - α) * λ)
+    return β, β0
 end
 
-function cycle_coord(β_next, cols, mean_shift, λ, α)
-    for (i, c) in enumerate(cols)
-        β_next[i] = update_coef(β_next, c, mean_shift[i], λ, α)
-    end
-end
-
-function coord_descent(X, X_shift; λ = nothing, α = 1.0, min_λ_ε = 0.001, λ_grid_length = 100, outer_max_iters = 20, inner_max_iters = 20, tol = 0.01)
-    # Initialize variables
+# NEED TO OPTIMIZE THIS FUNCTION STILL
+function cross_coord_descent(X, X_shift; nfolds = 5, λ = nothing, min_λ_ε = 0.01, λ_grid_length = 100, outer_max_iters = 20, inner_max_iters = 20, tol = 0.01, only_refit_best = true)
+    # Get components to standardize data to select initial lambda grid
     n, d = size(X)
-
-    # Get components to standardize data
     means = mean(X, dims = 1)
     invsds = 1 ./ std(X, dims = 1)
 
@@ -288,109 +308,67 @@ function coord_descent(X, X_shift; λ = nothing, α = 1.0, min_λ_ε = 0.001, λ
     invsds[isinf.(invsds)] .= 0
 
     # Standardize the data
-    Z = (X .- means) .* invsds
     Z_shift = (X_shift .- means) .* invsds
-    mean_shift = vec(mean(Z_shift, dims = 1))
+    mean_shift = mean(Z_shift, dims = 1)
 
-    ZZbyn = transpose(Z) * Z ./ n
-    ZZbyn[diagind(ZZbyn)] .= 0
-    cols = eachcol(ZZbyn)
-
-    # If λ is unspecified, automatically construct a grid.
-    # We choose λ_max as the smallest value of λ that will guarantee 
-    # all coefficients remain 0 after updating for the first time.
-    # β will not change from 0 if λ_max > |mean_shift| / α
-    λ = nothing
+    # Compute search grid of lambda
     if isnothing(λ)
-        λ_max = maximum(abs.(mean_shift)) / α
+        λ_max = maximum(abs.(mean_shift))
         λ_min = min_λ_ε * λ_max    
-        λ_range = reverse(exp.(range(log(λ_min), log(λ_max), length = λ_grid_length)))
+        λ_range = exp.(range(log(λ_min), log(λ_max), length = λ_grid_length))
     else
-        λ_range = reverse(λ)
+        λ_range = λ
     end
 
-    # Set up storage for coefficients
-    λ_length = length(λ_range)
-    β = Vector{Vector{<:Real}}(undef, λ_length)
-    β_next = zeros(d)
+    ### Run coordinate descent cross-validated ###
+    # Set up initial variables and storage
+    train, test = train_test_folds(1:n, nfolds)
+    βs = Vector{AbstractMatrix}(undef, nfolds)
+    β0s = Vector{AbstractVector}(undef, nfolds)
+    loss = Vector{AbstractVector}(undef, nfolds)
 
-    # We loop through λ in the outer loop to take advantage of warm starts
-    for (λ_index, λ) in enumerate(λ_range)
-        # First, cycle through all variables to determine the active set
-        # Then, iterate on the active set until convergence
-        # Finally, repeat on the entire set of variables. If nothing changes, done!
-        # Otherwise, update the active set and repeat 
-        active_set = []
-        norm_next = tol .+ 1.0
-        outer_iteration = 1
-        # Run an initial update
-        cycle_coord(β_next, cols, mean_shift, λ, α)
-        prev_riesz_loss = riesz_loss(Z, mean_shift, β_next)
 
-        while (outer_iteration < outer_max_iters)
-            # Initial full set iteration. Iterate through each coordinate cyclically
-            cycle_coord(β_next, cols, mean_shift, λ, α)
-
-            # Update the active set
-            next_active_set = findall(β_next .!= 0)
-            
-            # Update the norm to track convergence
-            next_riesz_loss = riesz_loss(Z, mean_shift, β_next)
-            norm_next = pct_change(next_riesz_loss, prev_riesz_loss)
-            prev_riesz_loss = next_riesz_loss
-
-            # If the active set has not changed, then we're done. Otherwise, keep going
-            active_set == next_active_set && break
-            active_set = next_active_set
-
-            # Update active set until convergence
-            inner_iteration = 1
-            while (inner_iteration < inner_max_iters) && (norm_next > tol)
-
-                # Repeat initial loop twice
-                cycle_coord(β_next, cols, mean_shift, λ, α)
-                
-                # Update the norm to track convergence
-                next_riesz_loss = riesz_loss(Z, mean_shift, β_next)
-                norm_next = pct_change(next_riesz_loss, prev_riesz_loss)
-                prev_riesz_loss = next_riesz_loss
-                inner_iteration += 1
-            end
-            outer_iteration += 1
-        end
-        β[λ_index] = copy(β_next)
+    # Cross-validate coordinate descent
+    for fold in 1:nfolds
+        X_train = view(X, train[fold], :)
+        X_shift_train = view(X_shift, train[fold], :)
+        βs[fold], β0s[fold] = coord_descent(X_train, X_shift_train; λ = λ_range, min_λ_ε = min_λ_ε, λ_grid_length = λ_grid_length, outer_max_iters = outer_max_iters, inner_max_iters = inner_max_iters, tol = tol)
+        
+        X_test = view(X, test[fold], :)
+        X_shift_test = view(X_shift, test[fold], :)
+        loss[fold] = vec(riesz_loss(X_test, X_shift_test, βs[fold], reshape(β0s[fold], 1, length(λ_range))))
     end
 
-    # Reconstruct coefficients to be on the original scale
-    β_orig = reduce(hcat, β)
-    β_orig = β_orig .* transpose(invsds)
+    mean_loss = mean(reduce(hcat, loss), dims = 2)
+    best_λ_index = argmin(vec(mean_loss))
 
-    # Finally, add the intercept.
-    # This intercept, when scaled by y, accounts for the fact 
-    # that when the β are rescaled, they no longer sum to 1. 
-    β0 = 1 .- mean(X * β_orig, dims = 1)
+    total_λ_range = only_refit_best ? λ_range[best_λ_index] : λ_range
+    β, β0 = coord_descent(X, X_shift; λ = [total_λ_range], outer_max_iters = outer_max_iters, inner_max_iters = inner_max_iters, tol = tol)
 
-    return β_orig, β0
+    return β, β0, total_λ_range
 end
 
-@time coord_descent(X, X_shift)
+#Profile.clear()
+@time β, β0 = coord_descent(X, X_shift; λ_grid_length = 100)
+#Profile.print(format=:flat)
 
-β, β0 = coord_descent(X, X_shift)
-best = argmin(vec(riesz_loss(X, X_shift, β, β0)))
+@time βc, β0c, λc = cross_coord_descent(X, X_shift; λ_grid_length = 20)
 
+    mean((X * βc .+ β0c) .* y)
 
-    ipws = mean((X * β .+ β0).*y, dims = 1)
+    ipws = mean((X * β .+ transpose(β0)).*y, dims = 1)
     truth = cfmean(scm, treat_all)
 
-    β
+    λ_range[argmin((vec(ipws) .- truth.μ).^2)]
+    λc
 
     λ = nothing
     α = 1.0
     min_λ_ε = 0.01
-    λ_grid_length = 100
+    λ_grid_length = 20
     outer_max_iters = 20
     inner_max_iters = 20
-    tol = 0.01
+    tol = 0.0
     # Initialize variables
     n, d = size(X)
 
@@ -429,7 +407,7 @@ best = argmin(vec(riesz_loss(X, X_shift, β, β0)))
     hline!([truth.μ])
 
     riesz_loss(X::AbstractMatrix, X_shift::AbstractMatrix, β::AbstractMatrix, β0::AbstractMatrix) = mean((X * β .+ β0).^2, dims = 1) .- mean(2 .* ((X_shift * β) .+ β0), dims = 1)
-    losses = vec(riesz_loss(X, X_shift, β, β0))
+    losses = vec(riesz_loss(X, X_shift, β, reshape(β0, 1, length(λ_range))))
     plot(log.(λ_range), log.(losses .- minimum(losses) .+ 0.001))
     xflip!(true)
 
@@ -437,3 +415,4 @@ best = argmin(vec(riesz_loss(X, X_shift, β, β0)))
     xflip!(true)
 
 
+mean((X_test * βs[fold] .+ β0s[fold]).^2, dims = 1) .- mean(2 .* ((X_shift_test * βs[fold]) .+ β0s[fold]), dims = 1)

@@ -29,7 +29,7 @@ module RandomHAL
     include("riesz.jl")
     export coord_descent, cross_coord_descent, predict_rieszhal
     include("rieszhal_mlj_interface.jl")
-    export HALRiesz
+    export HALRiesz, RandomHALRiesz
 
     export fit, predict
 end
