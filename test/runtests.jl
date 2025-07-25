@@ -23,20 +23,6 @@ dgp = @dgp(
     )
 scm = StructuralCausalModel(dgp, :A, :Y)
 
-dgp = @dgp(
-        X2 ~ Beta(2, 3),
-        X3 ~ Beta(3, 2),
-        X4 ~ Beta(3, 3),
-        A ~ (@. Bernoulli(logistic(-(X2 + X3 + 6 * X4 .+ 0.1)./8))),
-        Y ~ (@. Normal(A + X2 + X3 + X4 .+ 1, 0.1))
-    )
-scm = StructuralCausalModel(dgp, :A, :Y)
-
-n = 900
-ct = rand(scm, n)
-X = Tables.Columns(responseparents(ct))
-y = vec(responsematrix(ct))
-
 function test_basis(smoothness)
     basis, all_sections, term_lengths = ha_basis_matrix(X, smoothness)#; basis_type = basis_type)
 

@@ -12,12 +12,12 @@ function remove_duplicates(X1, X2, terms, coltypes, sections)
         if any(bools)
             # In the case where every column is Bool, we only need to keep the single interaction between them
             if all(bools)
-                binary_interaction = prod(X1[i] for i in section[bools])
+                binary_interaction = reduce(.*, X1[i] for i in section[bools])
                 output[i] = reshape(binary_interaction, nrow(X1), 1)
             # If some are not Bool, the basis block will contain duplicates from lower orders, 
             # except in columns where all of the Bool columns interact
             else
-                binary_interaction = prod(X2[i] for i in section[bools])
+                binary_interaction = reduce(.*, X2[i] for i in section[bools])
                 output[i] = terms[i][:, binary_interaction]
             end
         # If the section doesn't contain any Bool, no duplicate columns need be culled
