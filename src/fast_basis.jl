@@ -44,7 +44,7 @@ function binary_bin_search(X::AbstractMatrix{T}, bins::AbstractMatrix{T}) where 
 
     # Set up tracking variables to perform a binary search for each observation simultaneously
     n = size(X, 1)
-    lh = hcat(fill(1, n), fill(length(bins), n))
+    lh = hcat(fill(1, n), fill(size(bins, 1), n))
     mid = lh[:,1] .+ (lh[:,2] .- lh[:,1]) .÷ 2
 
     # Keep halving the search area within nested bins until we've narrowed to a single bin
@@ -82,10 +82,14 @@ struct NestedMatrix
     end
 end
 
-# Matrix-free multiplication 
+# Matrix-free multiplication #
+
+# Multiply a coefficient vector by each indicator basis
+mul(B::NestedMatrix, v::AbstractVector) = cumsum(v)[B.order] # Assumes v and B have compatible length
+
 function *(B::NestedMatrix, v::AbstractVector)
-    length(v) != B.ncol && throw(ArgumentError(DIM_ERRMSG))
-    cumsum(v)[B.order]
+    length(v) != B.ncol && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
+    mul(B, v)
 end
 
 ### Transpose of Indicator Basis Matrix ###
@@ -96,9 +100,10 @@ struct NestedMatrixTranspose
 end
 
 # Matrix-free multiplication #
+
+# Take inner product of a vector of observations with each indicator basis
 # TODO: Might be able to restructure this to eke out a little more performance
-function *(B::NestedMatrixTranspose, v::AbstractVector)
-    B.ncol != length(v) && throw(ArgumentError(DIM_ERRMSG))
+function mul(B::NestedMatrixTranspose, v::AbstractVector) # assumes B and v are compatible
     out = zeros(B.nrow)
     for i in 1:length(v)
         out[B.order[i]] += v[i]
@@ -106,6 +111,52 @@ function *(B::NestedMatrixTranspose, v::AbstractVector)
     return cumsum(out)
 end
 
+function *(B::NestedMatrixTranspose, v::AbstractVector)
+    B.ncol != length(v) && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
+    mul(B, v)
+end
+
 # Transpose methods #
 transpose(B::NestedMatrix) = NestedMatrixTranspose(B.order, B.nrow, B.ncol)
 transpose(B::NestedMatrixTranspose) = NestedMatrix(B.order, B.nrow, B.ncol)
+
+### Blocks of NestedIndicators
+struct NestedIndicatorBlocks
+    blocks::AbstractVector{NestedIndicators}
+    function NestedIndicatorBlocks(sections::AbstractVector{<:AbstractVector{Int64}}, X::AbstractMatrix)
+        all_ranks = reduce(hcat, map(competerank, eachcol(Xm)))
+        return new([NestedIndicators(all_ranks::AbstractMatrix{Int64}, section::AbstractVector{Int64}, X::AbstractMatrix) for section in sections])
+    end
+end
+
+struct NestedMatrixBlocks
+    blocks::AbstractVector{NestedMatrix}
+end
+
+function mul(B::NestedMatrixBlocks, v::AbstractVector, block_col_ind) # assumes B and v are compatible
+    block_starts = vcat([0], cumsum(block_col_ind))
+    block_ranges = [(block_starts[i-1]+1):block_starts[i] for i in 2:length(block_starts)]
+    reduce(+, mul(B.blocks[i], v[block_ranges[i]]) for i in 1:length(block_ranges))
+end
+
+function *(B::NestedMatrixBlocks, v::AbstractVector)
+    block_col_ind = map(block -> block.ncol, B.blocks)
+    sum(block_col_ind) != length(v) && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
+    mul(B, v, block_col_ind)
+end
+
+struct NestedMatrixBlocksTranspose
+    blocks::AbstractVector{NestedMatrixTranspose}
+end
+
+function mul(B::NestedMatrixBlocksTranspose, v::AbstractVector) # assumes B and v are compatible
+    reduce(vcat, map(block -> mul(block, v), B.blocks))
+end
+
+function *(B::NestedMatrixBlocksTranspose, v::AbstractVector)
+    B.blocks[1].ncol != length(v) && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
+    mul(B, v)
+end
+
+transpose(B::NestedMatrixBlocks) = NestedMatrixBlocksTranspose(map(b -> transpose(b), B.blocks))
+transpose(B::NestedMatrixBlocksTranspose) = NestedMatrixBlocks(map(b -> transpose(b), B.blocks))
