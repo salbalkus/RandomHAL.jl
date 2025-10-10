@@ -15,7 +15,8 @@ function fit_glmnet(basis::AbstractMatrix, y::Union{AbstractVector{<:Number}, Ab
 end
 
 # Helper function to extract the sections and knots selected by a LASSO fit on the matrix version of the basis
-function get_sections_and_knots(X, nonzero_indices, all_possible_sections, term_lengths)
+function get_sections_and_knots(X, nonzero_indices, all_possible_sections, term_lengths; remove_duplicate_interactions = false)
+    x = Tables.Columns(X)
     n = nrow(X)
     coltypes = Tables.schema(X).types # Get type of each variable
     # List all possible interactions of variables
@@ -30,8 +31,10 @@ function get_sections_and_knots(X, nonzero_indices, all_possible_sections, term_
     cur_section_i, state = iterate(section_tracker)
 
     # Store the binary interaction terms in order to facilitate filtering out duplicate columns skipped previously
-    binary_interaction = [any(coltypes[section] .== Bool) ? findall(prod(X[i] for i in section[findall(coltypes[section] .== Bool)])) : (1:n) for section in all_possible_sections]
-
+    # TODO: Double-check correctness. Does this handle boolean main terms correctly?
+    if remove_duplicate_interactions
+        binary_interaction = [any(coltypes[section] .== Bool) ? findall(reduce(.*, x[i] for i in section[findall(coltypes[section] .== Bool)])) : (1:n) for section in all_possible_sections]
+    end
     # Iterate through all nonzero basis coefficients to extract sections and knots
     for (i, nz) in enumerate(nonzero_indices)
         # Iterate through basis functions until we reach the section for the current one
@@ -47,8 +50,12 @@ function get_sections_and_knots(X, nonzero_indices, all_possible_sections, term_
 
         # For interactions with binary variables, need to filter out the zeroes
         knot_index_before_filter = nz - prev_basis_bound
-        knot_index = binary_interaction[cur_section_i][knot_index_before_filter]
-        knots[i] = [Tables.getcolumn(X, s)[knot_index] for s in sections[i]]
+        if remove_duplicate_interactions
+            knot_index = binary_interaction[cur_section_i][knot_index_before_filter]
+            knots[i] = [Tables.getcolumn(X, s)[knot_index] for s in sections[i]]
+        else
+            knots[i] = coltypes[sections[i]] == (Bool,) ? [true] : [Tables.getcolumn(X, s)[knot_index_before_filter] for s in sections[i]]
+        end
     end
 
     return sections, knots

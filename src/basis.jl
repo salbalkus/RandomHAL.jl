@@ -1,7 +1,7 @@
 basis_function(Xcol1::AbstractVector{<:Real}, Xcol2::AbstractVector{<:Real}) = Xcol1 .>= transpose(Xcol2)
 basis_function(Xcol1::AbstractVector{<:Real}, Xcol2::AbstractVector{<:Real}, smoothness::Int) = basis_function(Xcol1, Xcol2) .* (Xcol1 .- transpose(Xcol2)).^smoothness ./ factorial(smoothness)
 
-function remove_duplicates(X1, X2, terms, coltypes, sections)
+function remove_duplicates(X1, X2, terms, coltypes, sections; remove_duplicate_interactions = false)
     output = Vector{AbstractMatrix}(undef, length(terms))
     # Check which columns are binary and select only the columns from above using the interaction
     # If all are binary, replace with the interaction
@@ -9,17 +9,17 @@ function remove_duplicates(X1, X2, terms, coltypes, sections)
         bools = [c == Bool for c in coltypes[section]]
 
         # If there are Bool columns, then we need to cull duplicate columns
-        if any(bools)
+        if all(bools)
             # In the case where every column is Bool, we only need to keep the single interaction between them
-            if all(bools)
-                binary_interaction = reduce(.*, X1[i] for i in section[bools])
-                output[i] = reshape(binary_interaction, nrow(X1), 1)
+            binary_interaction = reduce(.*, X1[i] for i in section[bools])
+            output[i] = reshape(binary_interaction, nrow(X1), 1)
             # If some are not Bool, the basis block will contain duplicates from lower orders, 
             # except in columns where all of the Bool columns interact
-            else
-                binary_interaction = reduce(.*, X2[i] for i in section[bools])
-                output[i] = terms[i][:, binary_interaction]
-            end
+            # However, we don't want to do this for the Riesz regression, because
+            # duplicate basis functions may still differ between shifted and unshifted basis functions
+        elseif remove_duplicate_interactions && any(bools)
+            binary_interaction = reduce(.*, X2[i] for i in section[bools])
+            output[i] = terms[i][:, binary_interaction]
         # If the section doesn't contain any Bool, no duplicate columns need be culled
         else
             output[i] = terms[i]
