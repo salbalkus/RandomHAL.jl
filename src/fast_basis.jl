@@ -59,8 +59,6 @@ function binary_bin_search(X::AbstractMatrix{T}, bins::AbstractMatrix{T}) where 
 end
 
 ### Nested Indicators Structure ###
-# TODO: Currently includes a "final bin" that sums all of the extraneous stuff not in a bin
-# Can we remove this to increase efficiency?
 struct NestedIndicators
     section::AbstractVector{Int64}
     bins::AbstractMatrix
@@ -78,14 +76,14 @@ struct NestedMatrix
     nrow::Int64
     function NestedMatrix(M::NestedIndicators, X::AbstractMatrix)
         order = binary_bin_search(X[:, M.section], M.bins)
-        return new(order, size(M.bins, 1), length(order))
+        return new(order, size(M.bins, 1)-1, length(order))
     end
 end
 
 # Matrix-free multiplication #
 
 # Multiply a coefficient vector by each indicator basis
-mul(B::NestedMatrix, v::AbstractVector) = cumsum(v)[B.order] # Assumes v and B have compatible length
+mul(B::NestedMatrix, v::AbstractVector) = vcat(cumsum(reverse(v)),[0])[B.order] # Assumes v and B have compatible length
 
 function *(B::NestedMatrix, v::AbstractVector)
     length(v) != B.ncol && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
@@ -103,13 +101,18 @@ end
 
 # Take inner product of a vector of observations with each indicator basis
 # TODO: Might be able to restructure this to eke out a little more performance
-function mul(B::NestedMatrixTranspose, v::AbstractVector) # assumes B and v are compatible
+function muldif(B::NestedMatrixTranspose, v::AbstractVector) # assumes B and v are compatible
     out = zeros(B.nrow)
     for i in 1:length(v)
+        if B.order[i] > B.nrow
+            continue
+        end
         out[B.order[i]] += v[i]
     end
-    return cumsum(out)
+    return reverse(out)
 end
+
+mul(B::NestedMatrixTranspose, v::AbstractVector) = cumsum(muldif(B, v))
 
 function *(B::NestedMatrixTranspose, v::AbstractVector)
     B.ncol != length(v) && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
@@ -124,7 +127,7 @@ transpose(B::NestedMatrixTranspose) = NestedMatrix(B.order, B.nrow, B.ncol)
 struct NestedIndicatorBlocks
     blocks::AbstractVector{NestedIndicators}
     function NestedIndicatorBlocks(sections::AbstractVector{<:AbstractVector{Int64}}, X::AbstractMatrix)
-        all_ranks = reduce(hcat, map(competerank, eachcol(Xm)))
+        all_ranks = reduce(hcat, map(competerank, eachcol(X)))
         return new([NestedIndicators(all_ranks::AbstractMatrix{Int64}, section::AbstractVector{Int64}, X::AbstractMatrix) for section in sections])
     end
 end
@@ -160,3 +163,88 @@ end
 
 transpose(B::NestedMatrixBlocks) = NestedMatrixBlocksTranspose(map(b -> transpose(b), B.blocks))
 transpose(B::NestedMatrixBlocksTranspose) = NestedMatrixBlocks(map(b -> transpose(b), B.blocks))
+
+# Coordinate descent update
+soft_threshold(z, λ) = sign(z) * max(0, abs(z) - λ)
+soft_threshold_relaxed(z, λ) = z * (abs(z) > λ)
+
+function coord_update_ls!(β::AbstractVector{Float64}, β0::Float64, X::NestedMatrix, y::AbstractVector{Float64}, σ2::AbstractVector{Float64}, α::Float64, λ::Float64)    
+    # Compute residuals for entire block
+    r = (y - X * β)
+
+    # Compute correlation term for entire block
+    z = (transpose(X) * r) .+ (σ2 .* β)
+    
+    # Set up variable to track change in loss update
+    Δ = 0
+
+    # Sequentially update residuals and soft-threshold
+    for k in 1:X.ncol
+        β_prev = β[k]
+        β[k] = soft_threshold(z[k] - σ2[k]*β0 - Δ, X.nrow*λ*α) / ((1 + (1 - α)*λ) * σ2[k])
+        β0 -= (β[k] - β_prev) / n
+        Δ += σ2[k] * (β[k] - β_prev)
+    end
+end
+
+
+all_ranks = reduce(hcat, map(competerank, eachcol(Xm)))
+foo = NestedIndicators(all_ranks, [2], Xm)
+X = NestedMatrix(foo, Xm)
+#y = (y .- minimum(y)) ./ (maximum(y) - minimum(y))
+y = y .- mean(y)
+n = X.nrow
+σ2 = transpose(X) * ones(X.nrow)
+
+scatter(Xm[:, 2], y)
+β = zeros(X.ncol)
+λ = 0.00
+α = 1.0
+# Compute residuals for entire block
+anim = @animate for _ in 1:200
+#for _ in 1:100
+    scatter(Xm[:, 2], y, legend = :topleft)
+    r = (y - X * β)
+
+    # Compute correlation term for entire block
+    z = (transpose(X) * r) .+ (σ2 .* β)
+    
+    # Set up variable to track change in loss update
+    Δ = 0
+    #pred_update = 0
+    tracker = zeros(n+1)
+
+    # Sequentially update residuals and soft-threshold
+    for k in 1:X.ncol
+        β_prev = β[k]
+        β[k] = soft_threshold_relaxed(z[k] - Δ, X.nrow*λ*α) / ((1 + (1 - α)*λ) * σ2[k])
+        Δ += (β[k] - β_prev) * σ2[k]
+
+        tracker[k+1] = Δ
+    end
+    scatter!(Xm[:, 2], X*β, legend = :topleft)
+end
+
+gif(anim; fps = 20)
+
+scatter(Xm[:, 2], y)
+scatter!(Xm[:, 2], X*β)
+
+# I think something is wrong with this, bc coordinate descent not working...
+perm = reverse(sortperm(Xm[:, 2]))
+sorter = reverse(sortperm(X.order))
+
+X2 = Xm[:, 2] .>= Xm[perm, 2]'
+
+# Check whether the compressed matrix matches the true matrix
+X2 * ones(n) == (X * ones(X.ncol))
+v = randn(n)
+X2 * v ≈ (X * v)
+
+transpose(X) * ones(n)
+
+# Check whether the compressed transpose matches the true transpose
+X2' * ones(n) == (transpose(X) * ones(n))
+v = randn(n)
+(X2' * v) ≈ (transpose(X) * v)
+

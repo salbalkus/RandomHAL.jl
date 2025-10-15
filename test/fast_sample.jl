@@ -17,12 +17,15 @@ dgp = @dgp(
         X9 ~ Normal.((X3 .- 0.5) .* ((X3 .> 0.5) - (X3 .< 0.5)), 0.0),
 
         A ~ (@. Bernoulli(logistic((X2 + X2^2 + X3 + X3^2 + X4 + X4^2 + X2 * X3) - 2.5))),
-        Y ~ (@. Normal(A + X2 * X3 + A * X2 + A * X4 + 0.2 * (sqrt(10*X3*X4) + sqrt(10 * X2) + sqrt(10 * X3) + sqrt(10*X4)), 0.1))
+        #Y ~ (@. Normal(A + X2 * X3 + A * X2 + A * X4 + 0.2 * (sqrt(10*X3*X4) + sqrt(10 * X2) + sqrt(10 * X3) + sqrt(10*X4)), 0.1))
+        #Y ~ (@. Normal(sin.(2*pi * X2), 0.1))
+        Y ~ (@. Normal((2*(X2-0.5))^2, 0.0))
     )
 scm = StructuralCausalModel(dgp, :A, :Y)
-n = 100000
+n = 1000
 ct = rand(scm, n)
 X = Tables.Columns(treatmentparents(ct))
+Xm = Tables.matrix(X)
 y = vec(responsematrix(ct))
 
 function path_sample(all_ranks::AbstractVector{Tuple}, S::AbstractVector{Int64}; start = 1)
@@ -114,16 +117,6 @@ function fastsum4(v::Vector{Float64}, g::Vector{Int64}, nout)
     return cumsum(out)
 end
 
-b = randn(size(bins, 1))
-g
-gp = sortperm(g)
-
-g[gp]
-gp
-g
-
-groups
-
 @time fastsumtr2(b, g)
 @time fastsumtr(b, groups, n)
 
@@ -147,10 +140,10 @@ end
 # Possibly due to issues with the sequential addition
 # UPDATE: From the below, no it's not. Building the groups takes significant time, 
 # AND the fast matrix-vector from the groups is also 2-4x slower.
-function build_groups(g::Vector{Int64})
-    groups = [Int64[] for _ in 1:size(bins, 1)]
-    @simd for i in 1:size(ranks, 1)
-        append!(groups[g[i]], i)
+function build_groups(X::NestedMatrix)
+    groups = [Int64[] for _ in 1:X.ncol]
+    @simd for i in 1:X.nrow
+        append!(groups[X.order[i]], i)
     end
     groups
 end
