@@ -134,6 +134,9 @@ end
 
 struct NestedMatrixBlocks
     blocks::AbstractVector{NestedMatrix}
+    function NestedMatrixBlocks(nested_indicators::NestedIndicatorBlocks, X::AbstractMatrix)
+        new(map(block -> NestedMatrix(block, X), nested_indicators.blocks))
+    end
 end
 
 function mul(B::NestedMatrixBlocks, v::AbstractVector, block_col_ind) # assumes B and v are compatible
@@ -198,12 +201,12 @@ n = X.nrow
 
 scatter(Xm[:, 2], y)
 β = zeros(X.ncol)
-λ = 0.00
+λ = 0.0025
 α = 1.0
 # Compute residuals for entire block
-anim = @animate for _ in 1:200
-#for _ in 1:100
-    scatter(Xm[:, 2], y, legend = :topleft)
+#anim = @animate for _ in 1:100
+for _ in 1:10000
+    #scatter(Xm[:, 2], y, legend = :topleft)
     r = (y - X * β)
 
     # Compute correlation term for entire block
@@ -222,10 +225,10 @@ anim = @animate for _ in 1:200
 
         tracker[k+1] = Δ
     end
-    scatter!(Xm[:, 2], X*β, legend = :topleft)
+    #scatter!(Xm[:, 2], X*β, legend = :topleft)
 end
 
-gif(anim; fps = 20)
+#gif(anim; fps = 20)
 
 scatter(Xm[:, 2], y)
 scatter!(Xm[:, 2], X*β)
@@ -247,4 +250,24 @@ transpose(X) * ones(n)
 X2' * ones(n) == (transpose(X) * ones(n))
 v = randn(n)
 (X2' * v) ≈ (transpose(X) * v)
+
+# Does HAL give the same thing?
+# Turns out it suffers from the same problem...
+
+using GLMNet
+
+
+model = glmnet(X2, y)
+
+scatter(Xm[:, 2], y)
+scatter!(Xm[:, 2], GLMNet.predict(model, X2)[:,20])
+
+# Can also try other bases. Does the same thing!
+X3 = Xm[:, 2] .<= Xm[:, 2]'
+model3 = glmnet(X3, y)
+scatter(Xm[:, 2], y)
+scatter!(Xm[:, 2], GLMNet.predict(model, X3)[:,20])
+
+indb = NestedIndicatorBlocks([[1], [2], [3], [1,2], [1,3], [1,2,3]], Xm)
+XB = NestedMatrixBlocks(indb, Xm)
 
