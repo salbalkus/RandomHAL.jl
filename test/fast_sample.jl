@@ -4,6 +4,7 @@ using Distributions
 import LogExpFunctions: logistic
 using StatsBase
 using DecisionTree
+using Plots
 
 dgp = @dgp(
         X1 ~ Bernoulli(0.5),
@@ -17,14 +18,13 @@ dgp = @dgp(
         X9 ~ Normal.((X3 .- 0.5) .* ((X3 .> 0.5) - (X3 .< 0.5)), 0.0),
 
         A ~ (@. Bernoulli(logistic((X2 + X2^2 + X3 + X3^2 + X4 + X4^2 + X2 * X3) - 2.5))),
-        #Y ~ (@. Normal(A + X2 * X3 + A * X2 + A * X4 + 0.2 * (sqrt(10*X3*X4) + sqrt(10 * X2) + sqrt(10 * X3) + sqrt(10*X4)), 0.1))
-        #Y ~ (@. Normal(sin.(2*pi * X2), 0.1))
-        Y ~ (@. Normal((2*(X2-0.5))^2, 0.0))
+        #Y ~ (@. Normal(A + X2 * X3 + A * X2 + A * X4 + 0.2 * (sqrt(10*X3*X4) + sqrt(10 * X2) + sqrt(10 * X3) + sqrt(10*X4)), 0.01))
+        Y ~ (@. Normal(sin.(2*pi * X2), 0.1))
     )
 scm = StructuralCausalModel(dgp, :A, :Y)
 n = 1000
 ct = rand(scm, n)
-X = Tables.Columns(treatmentparents(ct))
+X = Tables.Columns(responseparents(ct))
 Xm = Tables.matrix(X)
 y = vec(responsematrix(ct))
 

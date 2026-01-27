@@ -1,6 +1,10 @@
-import Base: *
+# This file defines the objects needed to construct
+# and multiply fast HAL basis matrices
+
+import Base: *, getindex, size, transpose
 DIM_ERRMSG = "Number of columns of NestedMatrix must match number of rows of vector being multiplied."
 
+abstract type AbstractNestedMatrix end
 ### Utility Functions ###
 # Given a matrix of ranks and a section, construct a nested path of bins
 function path_sample(all_ranks::AbstractMatrix{Int64}, S::AbstractVector{Int64}; start = 1)
@@ -70,14 +74,15 @@ struct NestedIndicators
 end
 
 ### Indicator Basis Matrix ###
-struct NestedMatrix
+struct NestedMatrix <: AbstractNestedMatrix
     order::Vector{Int64}
     ncol::Int64
     nrow::Int64
-    function NestedMatrix(M::NestedIndicators, X::AbstractMatrix)
-        order = binary_bin_search(X[:, M.section], M.bins)
-        return new(order, size(M.bins, 1)-1, length(order))
-    end
+end
+
+function NestedMatrix(M::NestedIndicators, X::AbstractMatrix)
+    order = binary_bin_search(X[:, M.section], M.bins)
+    return NestedMatrix(order, size(M.bins, 1)-1, length(order))
 end
 
 # Matrix-free multiplication #
@@ -85,13 +90,20 @@ end
 # Multiply a coefficient vector by each indicator basis
 mul(B::NestedMatrix, v::AbstractVector) = vcat(cumsum(reverse(v)),[0])[B.order] # Assumes v and B have compatible length
 
-function *(B::NestedMatrix, v::AbstractVector)
+function Base.:*(B::NestedMatrix, v::AbstractVector)
     length(v) != B.ncol && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
     mul(B, v)
 end
 
+function Base.:*(B::NestedMatrix, V::AbstractMatrix)
+    size(V, 1) != B.ncol && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
+    reduce(hcat, mul(B, v) for v in eachcol(V))
+end
+
+Base.getindex(B::NestedMatrix, inds...) = NestedMatrix(B.order[inds...], B.ncol, length(inds...))
+
 ### Transpose of Indicator Basis Matrix ###
-struct NestedMatrixTranspose
+struct NestedMatrixTranspose <: AbstractNestedMatrix
     order::Vector{Int64}
     ncol::Int64
     nrow::Int64
@@ -114,14 +126,71 @@ end
 
 mul(B::NestedMatrixTranspose, v::AbstractVector) = cumsum(muldif(B, v))
 
-function *(B::NestedMatrixTranspose, v::AbstractVector)
+function squares(B::NestedMatrixTranspose) # assumes B and v are compatible
+    out = zeros(B.nrow)
+    for i in 1:length(B.order)
+        if B.order[i] > B.nrow
+            continue
+        end
+        out[B.order[i]] += 1 # TODO: Change this to the square of the column value when higher-order implemented
+    end
+    return cumsum(reverse(out))
+end
+
+
+function Base.:*(B::NestedMatrixTranspose, v::AbstractVector)
     B.ncol != length(v) && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
     mul(B, v)
 end
 
+function Base.:*(B::NestedMatrixTranspose, V::AbstractMatrix)
+    size(V, 1) != B.ncol && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
+    reduce(hcat, mul(B, v) for v in eachcol(V))
+end
+
+Base.getindex(B::NestedMatrixTranspose, inds...) = NestedMatrixTranspose(B.order[inds...], length(inds...), B.nrow)
+
 # Transpose methods #
 transpose(B::NestedMatrix) = NestedMatrixTranspose(B.order, B.nrow, B.ncol)
 transpose(B::NestedMatrixTranspose) = NestedMatrix(B.order, B.nrow, B.ncol)
+
+### Centered and Scaled Versions of NestedMatrix ###
+struct NestedMatrixCS <: AbstractNestedMatrix
+    B::NestedMatrix
+    μ::AbstractVector{Float64}
+    σ::AbstractVector{Float64}
+end
+
+function NestedMatrixCS(M::NestedIndicators, X::AbstractMatrix)
+    B = NestedMatrix(M, X)
+    μ = (transpose(B) * ones(B.nrow)) ./ B.nrow
+    σ = sqrt.(squares(transpose(B)) .- B.nrow*(μ.^2))
+    return NestedMatrixCS(B, μ, σ)
+end
+
+function Base.:*(B::NestedMatrixCS, v::AbstractVector)
+    length(v) != B.ncol && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
+    return (B.B * (v ./ B.σ)) .- dot(B.μ, v ./ B.σ)
+end
+
+struct NestedMatrixTransposeCS <: AbstractNestedMatrix
+    B::NestedMatrixTranspose
+    μ::AbstractVector{Float64}
+    σ::AbstractVector{Float64}
+end
+
+function NestedMatrixTransposeCS(M::NestedIndicators, X::AbstractMatrix)
+    B = NestedMatrix(M, X)
+    μ = (transpose(B) * ones(B.nrow)) ./ B.nrow
+    σ = sqrt.(squares(transpose(B)) .- B.nrow*(μ.^2))
+    return NestedMatrixTransposeCS(transpose(B), μ, σ)
+end
+
+function Base.:*(B::NestedMatrixTransposeCS, v::AbstractVector)
+    length(v) != B.B.ncol && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
+    return (B.B * v) .- (B.μ .* sum(v)) ./ B.σ
+end
+
 
 ### Blocks of NestedIndicators
 struct NestedIndicatorBlocks
@@ -132,11 +201,17 @@ struct NestedIndicatorBlocks
     end
 end
 
-struct NestedMatrixBlocks
+struct NestedMatrixBlocks <: AbstractNestedMatrix
     blocks::AbstractVector{NestedMatrix}
-    function NestedMatrixBlocks(nested_indicators::NestedIndicatorBlocks, X::AbstractMatrix)
-        new(map(block -> NestedMatrix(block, X), nested_indicators.blocks))
-    end
+    ncol::Int64
+    nrow::Int64
+end
+
+function NestedMatrixBlocks(nested_indicators::NestedIndicatorBlocks, X::AbstractMatrix)
+    blocks = map(block -> NestedMatrix(block, X), nested_indicators.blocks)
+    ncol = sum(block.ncol for block in blocks)
+    nrow = blocks[1].nrow
+    NestedMatrixBlocks(blocks, ncol, nrow)
 end
 
 function mul(B::NestedMatrixBlocks, v::AbstractVector, block_col_ind) # assumes B and v are compatible
@@ -145,129 +220,80 @@ function mul(B::NestedMatrixBlocks, v::AbstractVector, block_col_ind) # assumes 
     reduce(+, mul(B.blocks[i], v[block_ranges[i]]) for i in 1:length(block_ranges))
 end
 
-function *(B::NestedMatrixBlocks, v::AbstractVector)
+function Base.:*(B::NestedMatrixBlocks, v::AbstractVector)
     block_col_ind = map(block -> block.ncol, B.blocks)
     sum(block_col_ind) != length(v) && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
     mul(B, v, block_col_ind)
 end
 
-struct NestedMatrixBlocksTranspose
+function Base.:*(B::NestedMatrixBlocks, V::AbstractMatrix)
+    block_col_ind = map(block -> block.ncol, B.blocks)
+    sum(block_col_ind) != size(V, 1) && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
+    reduce(hcat, mul(B, v, block_col_ind) for v in eachcol(V))
+end
+
+getindex(B::NestedMatrixBlocks, inds...) = NestedMatrixBlocks([B.blocks[i][inds...] for i in 1:length(B.blocks)], B.ncol, length(inds...))
+
+struct NestedMatrixBlocksTranspose <: AbstractNestedMatrix
     blocks::AbstractVector{NestedMatrixTranspose}
+    ncol::Int64
+    nrow::Int64
 end
 
 function mul(B::NestedMatrixBlocksTranspose, v::AbstractVector) # assumes B and v are compatible
     reduce(vcat, map(block -> mul(block, v), B.blocks))
 end
 
-function *(B::NestedMatrixBlocksTranspose, v::AbstractVector)
+function Base.:*(B::NestedMatrixBlocksTranspose, v::AbstractVector)
     B.blocks[1].ncol != length(v) && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
     mul(B, v)
 end
 
-transpose(B::NestedMatrixBlocks) = NestedMatrixBlocksTranspose(map(b -> transpose(b), B.blocks))
-transpose(B::NestedMatrixBlocksTranspose) = NestedMatrixBlocks(map(b -> transpose(b), B.blocks))
-
-# Coordinate descent update
-soft_threshold(z, λ) = sign(z) * max(0, abs(z) - λ)
-soft_threshold_relaxed(z, λ) = z * (abs(z) > λ)
-
-function coord_update_ls!(β::AbstractVector{Float64}, β0::Float64, X::NestedMatrix, y::AbstractVector{Float64}, σ2::AbstractVector{Float64}, α::Float64, λ::Float64)    
-    # Compute residuals for entire block
-    r = (y - X * β)
-
-    # Compute correlation term for entire block
-    z = (transpose(X) * r) .+ (σ2 .* β)
-    
-    # Set up variable to track change in loss update
-    Δ = 0
-
-    # Sequentially update residuals and soft-threshold
-    for k in 1:X.ncol
-        β_prev = β[k]
-        β[k] = soft_threshold(z[k] - σ2[k]*β0 - Δ, X.nrow*λ*α) / ((1 + (1 - α)*λ) * σ2[k])
-        β0 -= (β[k] - β_prev) / n
-        Δ += σ2[k] * (β[k] - β_prev)
-    end
+function Base.:*(B::NestedMatrixBlocksTranspose, v::AbstractMatrix)
+    B.blocks[1].ncol != length(v) && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
+    reduce(hcat, mul(B, v) for v in eachcol(V))
 end
 
+transpose(B::NestedMatrixBlocks) = NestedMatrixBlocksTranspose(map(b -> transpose(b), B.blocks), B.nrow, B.ncol)
+transpose(B::NestedMatrixBlocksTranspose) = NestedMatrixBlocks(map(b -> transpose(b), B.blocks), B.nrow, B.ncol)
 
-all_ranks = reduce(hcat, map(competerank, eachcol(Xm)))
-foo = NestedIndicators(all_ranks, [2], Xm)
-X = NestedMatrix(foo, Xm)
-#y = (y .- minimum(y)) ./ (maximum(y) - minimum(y))
-y = y .- mean(y)
-n = X.nrow
-σ2 = transpose(X) * ones(X.nrow)
+getindex(B::NestedMatrixBlocksTranspose, inds...) = NestedMatrixBlocksTranspose([B.blocks[i][inds...] for i in 1:length(B.blocks)], length(inds...), B.nrow)
 
-scatter(Xm[:, 2], y)
-β = zeros(X.ncol)
-λ = 0.0025
-α = 1.0
-# Compute residuals for entire block
-#anim = @animate for _ in 1:100
-for _ in 1:10000
-    #scatter(Xm[:, 2], y, legend = :topleft)
-    r = (y - X * β)
+squares(B::NestedMatrixBlocksTranspose) = reduce(vcat, map(block -> squares(block), B.blocks))
 
-    # Compute correlation term for entire block
-    z = (transpose(X) * r) .+ (σ2 .* β)
-    
-    # Set up variable to track change in loss update
-    Δ = 0
-    #pred_update = 0
-    tracker = zeros(n+1)
-
-    # Sequentially update residuals and soft-threshold
-    for k in 1:X.ncol
-        β_prev = β[k]
-        β[k] = soft_threshold_relaxed(z[k] - Δ, X.nrow*λ*α) / ((1 + (1 - α)*λ) * σ2[k])
-        Δ += (β[k] - β_prev) * σ2[k]
-
-        tracker[k+1] = Δ
-    end
-    #scatter!(Xm[:, 2], X*β, legend = :topleft)
+### Centered and Scaled Versions of NestedMatrixBlocks ###
+struct NestedMatrixBlocksCS <: AbstractNestedMatrix
+    B::NestedMatrixBlocks
+    μ::AbstractVector{Float64}
+    σ::AbstractVector{Float64}
 end
 
-#gif(anim; fps = 20)
+function NestedMatrixBlocksCS(nested_indicators::NestedIndicatorBlocks, X::AbstractMatrix)
+    B = NestedMatrixBlocks(nested_indicators, X)
+    μ = (transpose(B) * ones(B.nrow)) ./ B.nrow
+    σ = sqrt.(squares(transpose(B)) .- B.nrow*(μ.^2))
+    return NestedMatrixBlocksCS(B, μ, σ)
+end
 
-scatter(Xm[:, 2], y)
-scatter!(Xm[:, 2], X*β)
+function Base.:*(B::NestedMatrixBlocksCS, v::AbstractVector)
+    length(v) != B.B.ncol && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
+    return (B.B * (v ./ B.σ)) .- dot(B.μ, v ./ B.σ)
+end
 
-# I think something is wrong with this, bc coordinate descent not working...
-perm = reverse(sortperm(Xm[:, 2]))
-sorter = reverse(sortperm(X.order))
+struct NestedMatrixBlocksTransposeCS <: AbstractNestedMatrix
+    B::NestedMatrixBlocksTranspose
+    μ::AbstractVector{Float64}
+    σ::AbstractVector{Float64}
+end
 
-X2 = Xm[:, 2] .>= Xm[perm, 2]'
+function NestedMatrixBlocksTransposeCS(nested_indicators::NestedIndicatorBlocks, X::AbstractMatrix)
+    B = NestedMatrixBlocks(nested_indicators, X)
+    μ = (transpose(B) * ones(B.nrow)) ./ B.nrow
+    σ = sqrt.(squares(transpose(B)) .- B.nrow*(μ.^2))
+    return NestedMatrixBlocksTransposeCS(transpose(B), μ, σ)
+end
 
-# Check whether the compressed matrix matches the true matrix
-X2 * ones(n) == (X * ones(X.ncol))
-v = randn(n)
-X2 * v ≈ (X * v)
-
-transpose(X) * ones(n)
-
-# Check whether the compressed transpose matches the true transpose
-X2' * ones(n) == (transpose(X) * ones(n))
-v = randn(n)
-(X2' * v) ≈ (transpose(X) * v)
-
-# Does HAL give the same thing?
-# Turns out it suffers from the same problem...
-
-using GLMNet
-
-
-model = glmnet(X2, y)
-
-scatter(Xm[:, 2], y)
-scatter!(Xm[:, 2], GLMNet.predict(model, X2)[:,20])
-
-# Can also try other bases. Does the same thing!
-X3 = Xm[:, 2] .<= Xm[:, 2]'
-model3 = glmnet(X3, y)
-scatter(Xm[:, 2], y)
-scatter!(Xm[:, 2], GLMNet.predict(model, X3)[:,20])
-
-indb = NestedIndicatorBlocks([[1], [2], [3], [1,2], [1,3], [1,2,3]], Xm)
-XB = NestedMatrixBlocks(indb, Xm)
-
+function Base.:*(B::NestedMatrixBlocksTransposeCS, v::AbstractVector)
+    length(v) != B.B.ncol && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
+    return (B.B * v) .- (B.μ .* sum(v)) ./ B.σ
+end
