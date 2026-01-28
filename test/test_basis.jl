@@ -79,7 +79,7 @@ y = vec(responsematrix(ct))
 
 end
 
-#@testset "Coordinate descent" begin
+@testset "Coordinate descent" begin
     # Set up inputs
     ycs = (y .- mean(y)) ./ sqrt(var(y, corrected=false))
     S = [[2]]
@@ -97,7 +97,7 @@ end
 
     # Run the algorithm
     λ_range = [0.1, 0.01, 0.001, 0.0001]
-    path = coord_descent(B, ycs, μ, σ2, λ_range; outer_max_iters = 1000, inner_max_iters = 1000, tol = 10e-7)
+    path = coord_descent(B, ycs, μ, σ2, λ_range; outer_max_iters = 1000, inner_max_iters = 1000, tol = 10e-7, warm_β = zeros(100))
     # Make sure we get close to a reasonable solution
     
     path_scaled = path .* invσ
@@ -112,8 +112,6 @@ end
     B2 = (B * Matrix(I, B.ncol, B.ncol))
     B2 = B2[:,1:(size(B2,2)-1)]
     glmnet_fit = glmnet(B2, ycs, lambda = λ_range, intercept = false)
-    glmnet_coefs = glmnet_fit.betas
-    B2 * glmnet_coefs[:, 1] .+ glmnet_fit.a0[1]
     glmnet_preds = GLMNet.predict(glmnet_fit, B2)
 
     glmnet_mse = [mean((GLMNet.predict(glmnet_fit, B2)[:, i] .- ycs).^2) for i in 1:length(λ_range)]
@@ -122,13 +120,41 @@ end
     @test all(abs_diff .< 0.01)
 
 
-    l = 3
-    scatter(preds[:, l], glmnet_preds[:, l])
-    scatter(glmnet_preds[:, l], ycs)
-    scatter!(preds[:, l], ycs)
+    #l = 3
+    #scatter(preds[:, l], glmnet_preds[:, l])
+    #scatter(glmnet_preds[:, l], ycs)
+    #scatter!(preds[:, l], ycs)
 
-    scatter(Xm[:, 2], ycs)
-    scatter!(Xm[:, 2], preds[:, l])
-    scatter!(Xm[:, 2], glmnet_preds[:, l])
+    #scatter(Xm[:, 2], ycs)
+    #scatter!(Xm[:, 2], preds[:, l])
+    #scatter!(Xm[:, 2], glmnet_preds[:, l])
+end
 
+@testset "Cross-validated model" begin
+    S = [[2]]
+    @time model = fast_fit_cv_randomhal(S, Xm, y)
+    
+    preds = predict_randomhal(model, Xm)
+    mse = mean((y .- preds).^2)
+    @test mse < 0.01
+
+    # How does this compare to glmnet?
+    indb = NestedIndicatorBlocks(S, Xm)
+    B = NestedMatrixBlocks(indb, Xm)
+    B2 = (B * Matrix(I, B.ncol, B.ncol))
+    glmnet_fit = glmnetcv(B2, y)
+    glmnet_preds = GLMNet.predict(glmnet_fit, B2)
+    glmnet_mse = mean((y .- glmnet_preds).^2)
+
+    @test abs(glmnet_mse - mse) < 0.001
+    
+    # Slight difference between us and glmnet...
+    # But this may be due to the randomness of the CV procedure
+    scatter(preds, glmnet_preds)
+    scatter(glmnet_preds, y)
+    scatter!(preds, y)
+
+    scatter(Xm[:, 2], y)
+    scatter!(Xm[:, 2], preds)
+    scatter!(Xm[:, 2], glmnet_preds)
 end

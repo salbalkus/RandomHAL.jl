@@ -51,7 +51,7 @@ function cycle_coord!(active::AbstractVector, β::AbstractVector{Float64}, X::Ne
     end
 end
 
-function coord_descent(X::NestedMatrixBlocks, y::AbstractVector{Float64}, μ::AbstractVector{Float64}, σ2::AbstractVector{Float64}, λ_range::AbstractVector{Float64}; outer_max_iters = 20, inner_max_iters = 50, tol = 0.0001, α=1.0)
+function coord_descent(X::NestedMatrixBlocks, y::AbstractVector{Float64}, μ::AbstractVector{Float64}, σ2::AbstractVector{Float64}, λ_range::AbstractVector{Float64}; outer_max_iters = 20, inner_max_iters = 50, tol = 0.0001, α=1.0, warm_β = nothing)
 
     # Check input
     n = X.nrow
@@ -64,8 +64,8 @@ function coord_descent(X::NestedMatrixBlocks, y::AbstractVector{Float64}, μ::Ab
 
     # Set up storage for coefficients
     β = Matrix(undef, d, length(λ_range))
-    β_prev = zeros(d)
-    β_next = zeros(d)
+    β_prev = isnothing(warm_β) ? zeros(d) : warm_β
+    β_next = β_prev
 
     for (λ_index, λ) in enumerate(λ_range)
         # First, cycle through all variables to determine the active set
