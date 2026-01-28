@@ -14,6 +14,7 @@ function cycle_coord!(active::AbstractVector, β::AbstractVector{Float64}, X::Ne
     r = (y - X * β_scaled) .+ dot(μ, β_scaled)
     rsum = sum(r)
     cur_ind  = 1
+
     for XB in X.blocks
         # Get the coefficient indices for the current block
         indices = cur_ind:(cur_ind + XB.ncol - 1)
@@ -21,26 +22,29 @@ function cycle_coord!(active::AbstractVector, β::AbstractVector{Float64}, X::Ne
         # Compute unpenalized coefficient update for entire block
         β_unpenalized = ((((transpose(XB) * r) .- (μ[indices].*rsum)) .* invσ[indices])./ XB.nrow) .+ β[indices]
 
-        # Set up variable to track change in loss update
-        Δ = 0
+        # Set up variable to track cumulative change in residual update
+        Δ_r = 0
 
         # Sequentially update residuals within the union of the current block and the active set and soft-threshold
         for k in indices
             if active[k]
-                #β_prev = β[k]
+                # These variables help track the sequential change in residuals
+                # for fast O(n) computation
+                β_prev = β[k]
+                Δ = (1 - μ[k])*Δ_r*invσ[k]
+
+                # Apply the lasso thresholding
                 β[k] = soft_threshold(β_unpenalized[k] - Δ, λ*α) / (1 + (1 - α)*λ)
 
-                β_scaled = β .* invσ
-                r = (y - X * β_scaled) .+ dot(μ, β_scaled)
-                rsum = sum(r)
-                β_unpenalized = ((((transpose(XB) * r) .- (μ[indices].*rsum)) .* invσ[indices])./ XB.nrow) .+ β[indices]
-
-                #Δ += (1 - μ[k])*(β[k] - β_prev)
+                # Update the change in residuals to avoid recomputing every subsequent coefficient
+                Δ_r += μ[k] * (β[k] - β_prev) * invσ[k]
             end
         end
 
         # Update residuals for the given block
-        #r .-= XB * β[indices]
+        β_scaled = β .* invσ
+        r = (y - X * β_scaled) .+ dot(μ, β_scaled)
+        rsum = sum(r)
 
         # Update indices to the next block
         cur_ind += XB.ncol
@@ -87,7 +91,7 @@ function coord_descent(X::NestedMatrixBlocks, y::AbstractVector{Float64}, μ::Ab
 
                 # Track convergence
                 norm_next = conv_crit(β_prev, β_next, σ2)
-                println("Norm next: ", norm_next)
+                #println("Norm next: ", norm_next)
 
                 β_prev .= β_next
                 inner_iteration += 1
@@ -98,7 +102,7 @@ function coord_descent(X::NestedMatrixBlocks, y::AbstractVector{Float64}, μ::Ab
             next_active = β_next .!= 0
             
             # If the active set has not changed, then we're done. Otherwise, keep going
-            println("Active set size: ", sum(next_active))
+            #println("Active set size: ", sum(next_active))
             active == next_active && break
             active = next_active
 
