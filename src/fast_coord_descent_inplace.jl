@@ -41,14 +41,14 @@ function cycle_coord!(active::BitVector, β, β_unp, β_prev, X::NestedMatrixBlo
         # Fast nesting structure requires we sum over all of the coefficients anyways,
         # so we don't skip inactive set for the high-level residual computation.
         # (could technically exclude inactive tails, but this introduces its own nontrivial overhead) 
-        r .= X * (β .* invσ)
+        mul!(r, X, (β .* invσ))
         r .= (y .- r) .+ sum(μ .* β .* invσ)
 
         # Get the coefficient indices for the current block
         indices = cur_ind:(cur_ind + XB.ncol - 1)
 
         # Compute unpenalized coefficient update for entire block
-        β_unp .= (transpose(XB) * r) 
+        mul!(β_unp, transpose(XB), r) 
         β_unp .= (((β_unp .- (view(μ, indices).*sum(r))) .* view(invσ, indices))./ XB.nrow) .+ view(β, indices)
 
         update_coefficients!(indices, active, β, β_unp, β_prev, μinvσdif, μinvσ, lasso_penalty, ridge_penalty)

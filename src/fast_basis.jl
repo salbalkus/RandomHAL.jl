@@ -1,7 +1,5 @@
 # This file defines the objects needed to construct
 # and multiply fast HAL basis matrices
-
-import Base: *, getindex, size, transpose
 DIM_ERRMSG = "Number of columns of NestedMatrix must match number of rows of vector being multiplied."
 
 abstract type AbstractNestedMatrix end
@@ -90,6 +88,11 @@ end
 # Multiply a coefficient vector by each indicator basis
 mul(B::NestedMatrix, v::AbstractVector) = vcat(cumsum(reverse(v)),[0])[B.order] # Assumes v and B have compatible length
 
+function mul!(out::AbstractVector, B::NestedMatrix, v::AbstractVector)
+    cumsum!(out, reverse(v))
+    permute!(out, B.order)
+end
+
 function Base.:*(B::NestedMatrix, v::AbstractVector)
     length(v) != B.ncol && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
     mul(B, v)
@@ -113,18 +116,29 @@ end
 
 # Take inner product of a vector of observations with each indicator basis
 # TODO: Might be able to restructure this to eke out a little more performance
-function muldif(B::NestedMatrixTranspose, v::AbstractVector) # assumes B and v are compatible
+function mul(B::NestedMatrixTranspose, v::AbstractVector) # assumes B and v are compatible
     out = zeros(B.nrow)
     for i in 1:length(v)
         if B.order[i] > B.nrow
             continue
         end
-        out[B.order[i]] += v[i]
+        out[length(out) - B.order[i] + 1] += v[i]
     end
-    return reverse(out)
+    cumsum!(out, out)
+    return out
 end
 
-mul(B::NestedMatrixTranspose, v::AbstractVector) = cumsum(muldif(B, v))
+# inplace version
+function mul!(out::AbstractVector, B::NestedMatrixTranspose, v::AbstractVector) # assumes B and v are compatible
+    out .= zeros(length(out))
+    for i in 1:length(v)
+        if B.order[i] > B.nrow
+            continue
+        end
+        out[length(out) - B.order[i] + 1] += v[i]
+    end
+    cumsum!(out, out)
+end
 
 function squares(B::NestedMatrixTranspose) # assumes B and v are compatible
     out = zeros(B.nrow)
@@ -132,9 +146,9 @@ function squares(B::NestedMatrixTranspose) # assumes B and v are compatible
         if B.order[i] > B.nrow
             continue
         end
-        out[B.order[i]] += 1 # TODO: Change this to the square of the column value when higher-order implemented
+        out[length(out) - B.order[i] + 1] += 1 # TODO: Change this to the square of the column value when higher-order implemented
     end
-    return cumsum(reverse(out))
+    return cumsum!(out, out)
 end
 
 
@@ -217,7 +231,23 @@ end
 function mul(B::NestedMatrixBlocks, v::AbstractVector, block_col_ind) # assumes B and v are compatible
     block_starts = vcat([0], cumsum(block_col_ind))
     block_ranges = [(block_starts[i-1]+1):block_starts[i] for i in 2:length(block_starts)]
-    reduce(+, mul(B.blocks[i], v[block_ranges[i]]) for i in 1:length(block_ranges))
+    output = zeros(B.blocks[1].nrow)
+    for i in 1:length(B.blocks)
+        output .+= mul(B.blocks[i], v[block_ranges[i]])
+    end
+    return output
+end
+
+function mul!(out::AbstractVector, B::NestedMatrixBlocks, v::AbstractVector) # assumes B and v are compatible
+    block_starts = vcat([0], cumsum(map(block -> block.ncol, B.blocks)))
+    block_ranges = [(block_starts[i-1]+1):block_starts[i] for i in 2:length(block_starts)]
+    out .= zeros(length(out))
+    tmp = Vector{Float64}(undef, B.blocks[1].nrow)
+    for i in 1:length(B.blocks)
+        mul!(tmp, B.blocks[i], v[block_ranges[i]])
+        out .+= tmp
+    end
+    return out
 end
 
 function Base.:*(B::NestedMatrixBlocks, v::AbstractVector)

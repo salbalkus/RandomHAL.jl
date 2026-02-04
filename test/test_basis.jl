@@ -6,9 +6,10 @@ import LogExpFunctions: logistic
 using StatsBase
 using DecisionTree
 using Plots
-using LinearAlgebra
+#using LinearAlgebra
 using Random
 using GLMNet
+using RandomHAL
 
 Random.seed!(1234)
 
@@ -163,12 +164,11 @@ end
         λ_range = sort(λ)
     end
 
-    μ = (transpose(B) * ones(B.nrow)) ./ n
-    σ2 = (squares(transpose(B)) ./ B.nrow) .- (μ.^2)
+    μ_B = (transpose(B) * ones(B.nrow)) ./ n
+    σ2_B = (squares(transpose(B)) ./ B.nrow) .- (μ_B.^2)
 
-    @time β = coord_descent(B, y_cs, μ, σ2, λ_range; outer_max_iters = 1000, inner_max_iters = 1000, tol = 1e-7, α = 1.0)
+    @time coord_descent(B, y_cs, μ_B, σ2_B, λ_range; outer_max_iters = 1000, inner_max_iters = 1000, tol = 1e-7, α = 1.0)
 
-    S = [[2]]
     @time model = fast_fit_cv_randomhal(S, Xm, y; K = 10)
     
     preds = predict_randomhal(model, Xm)
