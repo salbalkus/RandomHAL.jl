@@ -7,6 +7,7 @@ mutable struct RandomHALParameters
     indblocks::NestedIndicatorBlocks
     β::AbstractVector{Float64}
     β0::Float64
+    best_λ::Float64
 end
 
 function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}, X::AbstractMatrix, y::AbstractVector{Float64}; K::Int64 = 5, outer_max_iters::Int64 = 1000, inner_max_iters::Int64 = 1000, λ = nothing, λ_grid_length::Int64 = 100, min_λ_ε::Float64 = 1e-3, tol::Float64 = 1e-7, α::Float64 = 1.0)
@@ -79,7 +80,7 @@ function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}
     # Compute the intercept
     β0 = μ_y - (reshape(μ, 1, d) * β_final)[1,1]
 
-    return RandomHALParameters(indblocks, vec(β_final), β0)
+    return RandomHALParameters(indblocks, vec(β_final), β0, λ_range[best_index])
 end
 
 function predict_randomhal(model::RandomHALParameters, X::AbstractMatrix)

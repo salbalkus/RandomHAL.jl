@@ -5,12 +5,13 @@ using Distributions
 import LogExpFunctions: logistic
 using StatsBase
 using DecisionTree
-using Plots
 using LinearAlgebra
 using Random
 using GLMNet
-using RandomHAL
+using MLJBase
 using Combinatorics: combinations
+using RandomHAL
+
 
 Random.seed!(1234)
 
@@ -122,7 +123,7 @@ end
 
 
 @testset "Cross-validated model" begin
-
+    S = collect(combinations([2,3,4]))[2:end]
     min_λ_ε = 0.01
     λ_grid_length = 100
 
@@ -148,4 +149,15 @@ end
     glmnet_mse = mean((y .- glmnet_preds).^2)
 
     @test abs(mse - glmnet_mse) < 0.01
+end
+
+@testset "MLJ Interface" begin
+    model = RandomHALRegressor()
+
+
+    mach = machine(model, X, y) |> MLJBase.fit!
+
+    preds = MLJBase.predict(mach, X)
+    mse = mean((y .- preds).^2)
+    @test mse < 0.01
 end

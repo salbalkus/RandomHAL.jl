@@ -2,7 +2,7 @@ const HAL_DEFAULT_NLAMBDA = 100
 const HAL_DEFAULT_NFOLDS = 5
 
 ### Continuous Data ###
-mutable struct HALRegressor <: MLJBase.Deterministic
+mutable struct HALRegressor <: MMI.Deterministic
     smoothness::Int
     nlambda::Int
     nfolds::Int
@@ -22,7 +22,7 @@ end
 MLJBase.predict(model::HALRegressor, fitresult, Xnew) = predict_hal(fitresult.params, Xnew)
 
 ### Binary Data ###
-mutable struct HALBinaryClassifier <: MLJBase.Probabilistic
+mutable struct HALBinaryClassifier <: MMI.Probabilistic
     smoothness::Int
     nlambda::Int
     nfolds::Int

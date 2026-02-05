@@ -1,5 +1,5 @@
 module RandomHAL
-    import Combinatorics: powerset
+    import Combinatorics: powerset, combinations
     import DataAPI: ncol, nrow
     import LogExpFunctions: logistic
     import Base: *, getindex, size, transpose
@@ -11,11 +11,14 @@ module RandomHAL
     using MLJBase
     using InvertedIndices
     using LinearAlgebra
+    using MLJModelInterface
+    const MMI = MLJModelInterface
 
-    ###################################################
-    ### Code to implement classical HAL, RandomHAL, ###
-    ### and RieszHAL without fast nested scheme     ###
-    ###################################################
+
+    ############################################
+    ### Code to implement classical HAL and  ###
+    ### RandomHAL without fast nested scheme ###
+    ############################################
 
     include("hal/basis.jl")
     export ha_basis_matrix
@@ -32,26 +35,22 @@ module RandomHAL
     include("hal/randomhal_mlj_interface.jl")
     export RandomHALRegressor, RandomHALBinaryClassifier
 
-    include("hal/riesz.jl")
-    export coord_descent, cross_coord_descent, predict_rieszhal
-    
-    include("hal/rieszhal_mlj_interface.jl")
-    export HALRiesz, RandomHALRiesz
-    export fit, predict
-
     #############################################
     ### Code to implement RandomHAL with fast ###
     ### nested matrix multiplication scheme   ###
     #############################################
 
     # New fast basis stuff
-    include("fast_basis.jl")
+    include("fast_hal/fast_basis.jl")
     export NestedIndicators, NestedIndicatorBlocks, NestedMatrix, NestedMatrixBlocks, transpose, squares, *, mul, mul!
 
-    include("fast_coord_descent2.jl")
+    include("fast_hal/fast_coord_descent.jl")
     export coord_descent
 
-    include("fast_fit_randomhal.jl")
+    include("fast_hal/fast_fit_randomhal.jl")
     export fast_fit_cv_randomhal, predict_randomhal
+
+    include("fast_hal/fast_hal_mlj_interface.jl")
+    export RandomHALRegressor, fit, predict
 
 end
