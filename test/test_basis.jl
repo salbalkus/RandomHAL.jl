@@ -6,10 +6,11 @@ import LogExpFunctions: logistic
 using StatsBase
 using DecisionTree
 using Plots
-#using LinearAlgebra
+using LinearAlgebra
 using Random
 using GLMNet
 using RandomHAL
+using Combinatorics: combinations
 
 Random.seed!(1234)
 
@@ -26,7 +27,7 @@ dgp = @dgp(
 
         A ~ (@. Bernoulli(logistic((X2 + X2^2 + X3 + X3^2 + X4 + X4^2 + X2 * X3) - 2.5))),
         #Y ~ (@. Normal(A + X2 * X3 + A * X2 + A * X4 + 0.2 * (sqrt(10*X3*X4) + sqrt(10 * X2) + sqrt(10 * X3) + sqrt(10*X4)), 0.01))
-        Y ~ (@. Normal(sin.(2*pi * X2), 0.1))
+        Y ~ (@. Normal(sin.(2*pi * X2) + sin(2*pi*X3) + sin(2*pi*X4), 0.1))
     )
 scm = StructuralCausalModel(dgp, :A, :Y)
 n = 100
@@ -83,7 +84,7 @@ end
 #@testset "Coordinate descent" begin
     # Set up inputs
     ycs = (y .- mean(y)) ./ sqrt(var(y, corrected=false))
-    S = [[2]]
+    S = collect(combinations([2,3,4]))[2:end]
     indb = NestedIndicatorBlocks(S, Xm)
     B = NestedMatrixBlocks(indb, Xm)
     μ = (transpose(B) * ones(B.nrow)) ./ n
@@ -93,8 +94,8 @@ end
 
     # Test the scaling
     B2 = (B * Matrix(I, B.ncol, B.ncol))
-    B2c = (B2 .- reshape(μ, 1, B.nrow)) .* reshape(invσ, 1, B.nrow)
-    @test vec(mean(B2c .* B2c, dims=1)) ≈ vcat(ones(B.ncol-1), [0])
+    B2c = (B2 .- reshape(μ, 1, B.ncol)) .* reshape(invσ, 1, B.ncol)
+    @test vec(mean(B2c .* B2c, dims=1))[invσ .!= 0.0] ≈ ones(B.ncol)[invσ .!= 0.0]
 
     # Run the algorithm
     λ_range = [0.1, 0.01, 0.001, 0.0001]
@@ -102,7 +103,7 @@ end
     # Make sure we get close to a reasonable solution
     
     path_scaled = path .* invσ
-    preds = B * path_scaled .- (reshape(μ, 1, n) * path_scaled)# .+ mean(y)
+    preds = B * path_scaled .- (reshape(μ, 1, B.ncol) * path_scaled)# .+ mean(y)
     mse = [mean((preds[:, i] .- ycs).^2) for i in 1:size(path, 2)]
     @test all(mse .< 0.5)
     @test mse[2] < mse[1]
@@ -111,7 +112,6 @@ end
 
     # How close are we to GLMNet?
     B2 = (B * Matrix(I, B.ncol, B.ncol))
-    B2 = B2[:,1:(size(B2,2)-1)]
     @time glmnet_fit = glmnet(B2, ycs, lambda = λ_range, intercept = false)
     glmnet_preds = GLMNet.predict(glmnet_fit, B2)
 
@@ -142,7 +142,7 @@ end
     y_cs = (y .- μ_y) ./ σ_y
     n = length(y_cs)
 
-    S = [[2]]
+    S = collect(combinations([2,3,4]))[2:end]
     # Construct the indicators to produce a basis
     indblocks = NestedIndicatorBlocks(S, Xm)
 
@@ -167,7 +167,7 @@ end
     μ_B = (transpose(B) * ones(B.nrow)) ./ n
     σ2_B = (squares(transpose(B)) ./ B.nrow) .- (μ_B.^2)
 
-    @time coord_descent(B, y_cs, μ_B, σ2_B, λ_range; outer_max_iters = 1000, inner_max_iters = 1000, tol = 1e-7, α = 1.0)
+    @profview coord_descent(B, y_cs, μ_B, σ2_B, λ_range; outer_max_iters = 1000, inner_max_iters = 1000, tol = 1e-7, α = 1.0)
 
     @time model = fast_fit_cv_randomhal(S, Xm, y; K = 10)
     

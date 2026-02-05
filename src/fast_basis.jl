@@ -86,12 +86,27 @@ end
 # Matrix-free multiplication #
 
 # Multiply a coefficient vector by each indicator basis
-mul(B::NestedMatrix, v::AbstractVector) = vcat(cumsum(reverse(v)),[0])[B.order] # Assumes v and B have compatible length
+#mul(B::NestedMatrix, v::AbstractVector) = vcat(cumsum(reverse(v)),[0])[B.order] # Assumes v and B have compatible length
 
-function mul!(out::AbstractVector, B::NestedMatrix, v::AbstractVector)
-    cumsum!(out, reverse(v))
-    permute!(out, B.order)
+function mul(B::NestedMatrix, v::AbstractVector) # assumes B and v are compatible
+    out = Vector{Float64}(undef, B.nrow)
+    tmp = Vector{Float64}(undef, B.ncol+1)
+    
+    # Perform reverse cumulative sum
+    s = 0.0
+    @inbounds for i in B.ncol:-1:1
+        s += v[i]
+        tmp[B.ncol - i + 1] = s
+    end
+    tmp[B.ncol + 1] = 0.0
+
+    # Add up results for each entry of output column
+    @inbounds for i in 1:B.nrow
+        out[i] = tmp[B.order[i]]
+    end
+    return out
 end
+
 
 function Base.:*(B::NestedMatrix, v::AbstractVector)
     length(v) != B.ncol && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
@@ -238,16 +253,31 @@ function mul(B::NestedMatrixBlocks, v::AbstractVector, block_col_ind) # assumes 
     return output
 end
 
-function mul!(out::AbstractVector, B::NestedMatrixBlocks, v::AbstractVector) # assumes B and v are compatible
-    block_starts = vcat([0], cumsum(map(block -> block.ncol, B.blocks)))
-    block_ranges = [(block_starts[i-1]+1):block_starts[i] for i in 2:length(block_starts)]
-    out .= zeros(length(out))
-    tmp = Vector{Float64}(undef, B.blocks[1].nrow)
-    for i in 1:length(B.blocks)
-        mul!(tmp, B.blocks[i], v[block_ranges[i]])
-        out .+= tmp
+function mul!(out::AbstractVector, tmp::AbstractVector, B::NestedMatrixBlocks, v::AbstractVector) # assumes B and v are compatible
+    out .= 0.0
+    block_start = 1
+    block_end = 0
+    
+    # Iterate through each block
+    for b in B.blocks
+        block_end = block_end + b.ncol
+
+        # Perform reverse cumulative sum
+        s = 0.0
+        @inbounds for i in block_end:-1:block_start
+            s += v[i]
+            tmp[block_end - i + block_start] = s
+        end
+
+        # Add up results for each entry of output column
+        @inbounds for i in 1:B.nrow
+            idx = b.order[i]
+            if idx <= b.ncol
+                out[i] += tmp[block_start + idx - 1]
+            end
+        end
+        block_start = block_end + 1
     end
-    return out
 end
 
 function Base.:*(B::NestedMatrixBlocks, v::AbstractVector)
@@ -291,39 +321,4 @@ getindex(B::NestedMatrixBlocksTranspose, inds...) = NestedMatrixBlocksTranspose(
 
 squares(B::NestedMatrixBlocksTranspose) = reduce(vcat, map(block -> squares(block), B.blocks))
 
-### Centered and Scaled Versions of NestedMatrixBlocks ###
-struct NestedMatrixBlocksCS <: AbstractNestedMatrix
-    B::NestedMatrixBlocks
-    μ::AbstractVector{Float64}
-    σ::AbstractVector{Float64}
-end
 
-function NestedMatrixBlocksCS(nested_indicators::NestedIndicatorBlocks, X::AbstractMatrix)
-    B = NestedMatrixBlocks(nested_indicators, X)
-    μ = (transpose(B) * ones(B.nrow)) ./ B.nrow
-    σ = sqrt.(squares(transpose(B)) .- B.nrow*(μ.^2))
-    return NestedMatrixBlocksCS(B, μ, σ)
-end
-
-function Base.:*(B::NestedMatrixBlocksCS, v::AbstractVector)
-    length(v) != B.B.ncol && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
-    return (B.B * (v ./ B.σ)) .- dot(B.μ, v ./ B.σ)
-end
-
-struct NestedMatrixBlocksTransposeCS <: AbstractNestedMatrix
-    B::NestedMatrixBlocksTranspose
-    μ::AbstractVector{Float64}
-    σ::AbstractVector{Float64}
-end
-
-function NestedMatrixBlocksTransposeCS(nested_indicators::NestedIndicatorBlocks, X::AbstractMatrix)
-    B = NestedMatrixBlocks(nested_indicators, X)
-    μ = (transpose(B) * ones(B.nrow)) ./ B.nrow
-    σ = sqrt.(squares(transpose(B)) .- B.nrow*(μ.^2))
-    return NestedMatrixBlocksTransposeCS(transpose(B), μ, σ)
-end
-
-function Base.:*(B::NestedMatrixBlocksTransposeCS, v::AbstractVector)
-    length(v) != B.B.ncol && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
-    return (B.B * v) .- (B.μ .* sum(v)) ./ B.σ
-end

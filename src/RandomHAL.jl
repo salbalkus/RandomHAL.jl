@@ -36,8 +36,8 @@ module RandomHAL
     # New fast basis stuff
     import Base: *, getindex, size, transpose
     include("fast_basis.jl")
-    export NestedIndicators, NestedIndicatorBlocks, NestedMatrix, NestedMatrixBlocks, transpose, squares, *, mult, mult!
-    include("fast_coord_descent.jl")
+    export NestedIndicators, NestedIndicatorBlocks, NestedMatrix, NestedMatrixBlocks, transpose, squares, *, mul, mul!
+    include("fast_coord_descent2.jl")
     export coord_descent
     include("fast_fit_randomhal.jl")
     export fast_fit_cv_randomhal, predict

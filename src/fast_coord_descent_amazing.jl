@@ -7,7 +7,7 @@ pct_change(next_loss::Float64, prev_loss::Float64) = abs(next_loss - prev_loss) 
 
 # This function currently produces a lot of allocations. 
 # May be able to reduce these with clever programming tricks
-function update_coefficients!(indices, active::BitVector, β, β_unp, β_prev, μinvσdif, μinvσ, lasso_penalty::Float64, ridge_penalty::Float64, cur_ind::Int64)
+function update_coefficients!(indices, active::BitVector, β, β_unp, β_prev, μinvσdif, μinvσ, lasso_penalty::Float64, ridge_penalty::Float64)
     
     Δ_r = 0
     Δ = 0
@@ -22,7 +22,7 @@ function update_coefficients!(indices, active::BitVector, β, β_unp, β_prev, �
             Δ = μinvσdif[k]*Δ_r
 
             # Apply the lasso thresholding
-            β[k] = soft_threshold(β_unp[k - cur_ind + 1] - Δ, lasso_penalty) / ridge_penalty
+            β[k] = soft_threshold(β_unp[k] - Δ, lasso_penalty) / ridge_penalty
 
             # Update the change in residuals to avoid recomputing every subsequent coefficient
             #Δ_r += μ[k] * invσ[k] * (β[k] - β_prev)
@@ -31,28 +31,27 @@ function update_coefficients!(indices, active::BitVector, β, β_unp, β_prev, �
     end
 end
 
-function cycle_coord!(active::BitVector, β, β_prev, X::NestedMatrixBlocks, y,
+function cycle_coord!(active::BitVector, β, β_unp, β_prev, X::NestedMatrixBlocks, y, r,
                       μ, invσ, μinvσ, μinvσdif, 
                       lasso_penalty::Float64, ridge_penalty::Float64)
-    out = Vector{Float64}(undef, length(y))
-    tmp = Vector{Float64}(undef, length(β))
+    
     cur_ind  = 1
     for XB in X.blocks
         # Compute residuals for entire basis.
         # Fast nesting structure requires we sum over all of the coefficients anyways,
         # so we don't skip inactive set for the high-level residual computation.
         # (could technically exclude inactive tails, but this introduces its own nontrivial overhead) 
-        β_scaled = β .* invσ
-        #mul!(out, tmp, X, β_scaled)
-        r = (y .- X * β) .+ sum(μ .* β_scaled)
+        r .= X * (β .* invσ)
+        r .= (y .- r) .+ sum(μ .* β .* invσ)
 
         # Get the coefficient indices for the current block
         indices = cur_ind:(cur_ind + XB.ncol - 1)
 
         # Compute unpenalized coefficient update for entire block
-        β_unp = ((((transpose(XB) * r)  .- (view(μ, indices).*sum(r))) .* view(invσ, indices))./ XB.nrow) .+ view(β, indices)
+        β_unp .= (transpose(XB) * r) 
+        β_unp .= (((β_unp .- (view(μ, indices).*sum(r))) .* view(invσ, indices))./ XB.nrow) .+ view(β, indices)
 
-        update_coefficients!(indices, active, β, β_unp, β_prev, μinvσdif, μinvσ, lasso_penalty, ridge_penalty, cur_ind)
+        update_coefficients!(indices, active, β, β_unp, β_prev, μinvσdif, μinvσ, lasso_penalty, ridge_penalty)
         
         # Update indices to the next block
         cur_ind += XB.ncol
@@ -88,6 +87,8 @@ function coord_descent(X::NestedMatrixBlocks, y::Vector{Float64}, μ::Vector{Flo
     #end
     β_prev = zeros(d)
     β_next = copy(β_prev)
+    β_unp = Vector{Float64}(undef, d)
+    r = Vector{Float64}(undef, n)
 
     # Change behavior if we've provided an entire path of warm starts
     #outer_total_tracker = 0
@@ -120,7 +121,7 @@ function coord_descent(X::NestedMatrixBlocks, y::Vector{Float64}, μ::Vector{Flo
         outer_iteration = 1
 
         # Run an initial uFpdate
-        cycle_coord!(trues(d), β_next, β_prev, X, y, μ, invσ, μinvσ, μinvσdif, lasso_penalty, ridge_penalty)
+        cycle_coord!(trues(d), β_next, β_unp, β_prev, X, y, r, μ, invσ, μinvσ, μinvσdif, lasso_penalty, ridge_penalty)
 
         # Begin iterative descent
         while (outer_iteration < outer_max_iters)
@@ -130,7 +131,7 @@ function coord_descent(X::NestedMatrixBlocks, y::Vector{Float64}, μ::Vector{Flo
             # Update active set until convergence
             inner_iteration = 1
             while (inner_iteration < inner_max_iters) && (norm_next > tol)
-                cycle_coord!(active, β_next, β_prev, X, y, μ, invσ, μinvσ, μinvσdif, lasso_penalty, ridge_penalty)
+                cycle_coord!(active, β_next, β_unp, β_prev, X, y, r, μ, invσ, μinvσ, μinvσdif, lasso_penalty, ridge_penalty)
 
                 # Track convergence
                 norm_next = conv_crit(β_prev, β_next, σ2)
@@ -142,7 +143,7 @@ function coord_descent(X::NestedMatrixBlocks, y::Vector{Float64}, μ::Vector{Flo
             #inner_total_tracker += inner_iteration
 
             # One more cycle over all variables to assess if active set changes
-            cycle_coord!(trues(d), β_next, β_prev, X, y, μ, invσ, μinvσ, μinvσdif, lasso_penalty, ridge_penalty)
+            cycle_coord!(trues(d), β_next, β_unp, β_prev, X, y, r, μ, invσ, μinvσ, μinvσdif, lasso_penalty, ridge_penalty)
             next_active .= β_next .!= 0
             
             # If the active set has not changed, then we're done. Otherwise, keep going
