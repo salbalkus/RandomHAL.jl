@@ -62,7 +62,7 @@ function cycle_coord!(active::BitVector, β, β_prev, X::NestedMatrixBlocks, r,
     end
 end
 
-function coord_descent(X::NestedMatrixBlocks, y::Vector{Float64}, μ::Vector{Float64}, σ2::Vector{Float64}, λ_range::Vector{Float64}; outer_max_iters::Int64 = 1000, inner_max_iters::Int64 = 1000, tol::Float64 = 1e-6, α::Float64 = 1.0)
+function coord_descent(X::NestedMatrixBlocks, y::Vector{Float64}, μ::Vector{Float64}, σ2::Vector{Float64}, λ_range::Vector{Float64}; outer_max_iters::Int64 = 1000, inner_max_iters::Int64 = 1000, tol::Float64 = 1e-7, α::Float64 = 1.0)
 
     # Check input
     n = X.nrow

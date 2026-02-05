@@ -1,5 +1,4 @@
 
-using InvertedIndices
 
 split_folds(v, n, K) = [v[collect(i:K:n)] for i in 1:K]
 
@@ -10,7 +9,7 @@ mutable struct RandomHALParameters
     β0::Float64
 end
 
-function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}, X::AbstractMatrix, y::AbstractVector{Float64}; K::Int64 = 5, outer_max_iters::Int64 = 1000, inner_max_iters::Int64 = 1000, λ = nothing, λ_grid_length::Int64 = 100, min_λ_ε::Float64 = 1e-4, tol::Float64 = 1e-7, α::Float64 = 1.0)
+function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}, X::AbstractMatrix, y::AbstractVector{Float64}; K::Int64 = 5, outer_max_iters::Int64 = 1000, inner_max_iters::Int64 = 1000, λ = nothing, λ_grid_length::Int64 = 100, min_λ_ε::Float64 = 1e-3, tol::Float64 = 1e-7, α::Float64 = 1.0)
 
     # Preprocess outcome variable
     σ_y = sqrt(var(y, corrected=false))
@@ -23,6 +22,7 @@ function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}
 
     # Construct the basis and variance estimates for the training data
     B = NestedMatrixBlocks(indblocks, X)
+    d = B.ncol
 
     # If λ is unspecified, automatically construct a grid.
     # We choose λ_max as the smallest value of λ that will guarantee 
@@ -39,7 +39,7 @@ function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}
     # Fit the initial set of coefficients over the entire dataset
     μ = (transpose(B) * ones(B.nrow)) ./ B.nrow
     σ2 = (squares(transpose(B)) ./ B.nrow) .- (μ.^2)
-    @time β = coord_descent(B, y_cs, μ, σ2, λ_range; outer_max_iters = outer_max_iters, inner_max_iters = inner_max_iters, tol = tol, α = α)
+    β = coord_descent(B, y_cs, μ, σ2, λ_range; outer_max_iters = outer_max_iters, inner_max_iters = inner_max_iters, tol = tol, α = α)
 
 
     # Split the data into K folds
@@ -49,7 +49,6 @@ function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}
     mse = Vector{Matrix{Float64}}(undef, K)
     for k in 1:K
         # Split the data into training and testing folds
-        println("Fold ", k)
         train = reduce(vcat, folds[Not(k)])
         val = folds[k]
 
@@ -60,7 +59,7 @@ function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}
         μt = (transpose(Bt) * ones(Bt.nrow)) ./ B.nrow
         σ2t = (squares(transpose(Bt)) ./ Bt.nrow) .- (μt.^2)
 
-        @time βt = coord_descent(Bt, yt, μt, σ2t, λ_range; outer_max_iters = outer_max_iters, inner_max_iters = inner_max_iters, tol = tol, α = α)
+        βt = coord_descent(Bt, yt, μt, σ2t, λ_range; outer_max_iters = outer_max_iters, inner_max_iters = inner_max_iters, tol = tol, α = α)
 
         # Evaluate mean-squared error on validation set
         Bv = B[val]
@@ -78,8 +77,7 @@ function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}
     β_final[isnan.(β_final)] .= 0.0
 
     # Compute the intercept
-    β0 = μ_y - (reshape(μ, 1, n) * β_final)[1,1]
-    print("Best λ: ", λ_range[best_index])
+    β0 = μ_y - (reshape(μ, 1, d) * β_final)[1,1]
 
     return RandomHALParameters(indblocks, vec(β_final), β0)
 end
