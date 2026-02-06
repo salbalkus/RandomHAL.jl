@@ -155,18 +155,6 @@ function mul!(out::AbstractVector, B::NestedMatrixTranspose, v::AbstractVector) 
     cumsum!(out, out)
 end
 
-function squares(B::NestedMatrixTranspose) # assumes B and v are compatible
-    out = zeros(B.nrow)
-    for i in 1:length(B.order)
-        if B.order[i] > B.nrow
-            continue
-        end
-        out[length(out) - B.order[i] + 1] += 1 # TODO: Change this to the square of the column value when higher-order implemented
-    end
-    return cumsum!(out, out)
-end
-
-
 function Base.:*(B::NestedMatrixTranspose, v::AbstractVector)
     B.ncol != length(v) && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
     mul(B, v)
@@ -182,44 +170,6 @@ Base.getindex(B::NestedMatrixTranspose, inds...) = NestedMatrixTranspose(B.order
 # Transpose methods #
 transpose(B::NestedMatrix) = NestedMatrixTranspose(B.order, B.nrow, B.ncol)
 transpose(B::NestedMatrixTranspose) = NestedMatrix(B.order, B.nrow, B.ncol)
-
-### Centered and Scaled Versions of NestedMatrix ###
-struct NestedMatrixCS <: AbstractNestedMatrix
-    B::NestedMatrix
-    μ::AbstractVector{Float64}
-    σ::AbstractVector{Float64}
-end
-
-function NestedMatrixCS(M::NestedIndicators, X::AbstractMatrix)
-    B = NestedMatrix(M, X)
-    μ = (transpose(B) * ones(B.nrow)) ./ B.nrow
-    σ = sqrt.(squares(transpose(B)) .- B.nrow*(μ.^2))
-    return NestedMatrixCS(B, μ, σ)
-end
-
-function Base.:*(B::NestedMatrixCS, v::AbstractVector)
-    length(v) != B.ncol && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
-    return (B.B * (v ./ B.σ)) .- dot(B.μ, v ./ B.σ)
-end
-
-struct NestedMatrixTransposeCS <: AbstractNestedMatrix
-    B::NestedMatrixTranspose
-    μ::AbstractVector{Float64}
-    σ::AbstractVector{Float64}
-end
-
-function NestedMatrixTransposeCS(M::NestedIndicators, X::AbstractMatrix)
-    B = NestedMatrix(M, X)
-    μ = (transpose(B) * ones(B.nrow)) ./ B.nrow
-    σ = sqrt.(squares(transpose(B)) .- B.nrow*(μ.^2))
-    return NestedMatrixTransposeCS(transpose(B), μ, σ)
-end
-
-function Base.:*(B::NestedMatrixTransposeCS, v::AbstractVector)
-    length(v) != B.B.ncol && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
-    return (B.B * v) .- (B.μ .* sum(v)) ./ B.σ
-end
-
 
 ### Blocks of NestedIndicators
 struct NestedIndicatorBlocks
@@ -319,6 +269,160 @@ transpose(B::NestedMatrixBlocksTranspose) = NestedMatrixBlocks(map(b -> transpos
 
 getindex(B::NestedMatrixBlocksTranspose, inds...) = NestedMatrixBlocksTranspose([B.blocks[i][inds...] for i in 1:length(B.blocks)], length(inds...), B.nrow)
 
-squares(B::NestedMatrixBlocksTranspose) = reduce(vcat, map(block -> squares(block), B.blocks))
+### Nested Matrix * Low-Rank Matrix Data Structures ###
+
+struct Basis
+    indicators::NestedIndicators
+    smoothness::Int64
+    intercept::AbstractVector{Float64}
+    function Basis(all_ranks::AbstractMatrix{Int64}, section::AbstractVector{Int64}, X::AbstractMatrix, smoothness::Int64)
+        indicators = NestedIndicators(all_ranks, section, X)
+        intercept = vec(prod(X[:, section], dims = 2) .^ smoothness)
+        # Make sure the intercept is sorted because F multiplies from largest to smallest
+        return new(indicators, smoothness, sort(intercept, rev=true))
+    end
+end
+
+struct BasisMatrix <: AbstractNestedMatrix
+    F::NestedMatrix
+    l::AbstractVector{Float64}
+    r::AbstractVector{Float64}
+    smoothness::Int64
+end
+
+function BasisMatrix(B::Basis, X::AbstractMatrix)
+    F = NestedMatrix(B.indicators, X)
+    l = vec(prod(X[:, B.indicators.section], dims = 2) .^ B.smoothness)
+    BasisMatrix(F, l, B.intercept, B.smoothness)
+end
+
+mul(B::BasisMatrix, v::AbstractVector) = (B.l .* mul(B.F, v)) .- mul(B.F, B.r .* v) ./ factorial(B.smoothness)
+
+function Base.:*(B::BasisMatrix, v::AbstractVector)
+    length(v) != B.F.ncol && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
+    mul(B, v)
+end
+
+function Base.:*(B::BasisMatrix, V::AbstractMatrix)
+    size(V, 1) != B.F.ncol && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
+    reduce(hcat, mul(B, v) for v in eachcol(V))
+end
+
+Base.getindex(B::BasisMatrix, inds...) = BasisMatrix(getindex(B.F, inds...), B.l[inds...], B.r[inds...])
+
+### Transpose of Indicator Basis Matrix ###
+struct BasisMatrixTranspose <: AbstractNestedMatrix
+    F::NestedMatrixTranspose
+    l::AbstractVector{Float64}
+    r::AbstractVector{Float64}
+    smoothness::Int64
+end
+
+mul(B::BasisMatrixTranspose, v::AbstractVector) = mul(B.F, B.l .* v) .- (B.r .* mul(B.F, v)) ./ factorial(B.smoothness)
+
+function Base.:*(B::BasisMatrixTranspose, v::AbstractVector)
+    B.F.ncol != length(v) && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
+    mul(B, v)
+end
+
+function Base.:*(B::BasisMatrixTranspose, V::AbstractMatrix)
+    size(V, 1) != B.F.ncol && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
+    reduce(hcat, mul(B, v) for v in eachcol(V))
+end
+
+Base.getindex(B::BasisMatrixTranspose, inds...) = BasisMatrix(getindex(B.F, inds...), B.l[inds...], B.r[inds...], B.smoothness)
+# Transpose methods #
+transpose(B::BasisMatrix) = BasisMatrixTranspose(transpose(B.F), B.l, B.r, B.smoothness)
+transpose(B::BasisMatrixTranspose) = BasisMatrix(transpose(B.F), B.l, B.r, B.smoothness)
+
+struct BasisBlocks
+    blocks::AbstractVector{Basis}
+    function BasisBlocks(sections::AbstractVector{<:AbstractVector{Int64}}, X::AbstractMatrix, smoothness::Int64)
+        all_ranks = reduce(hcat, map(competerank, eachcol(X)))
+        return new([Basis(all_ranks::AbstractMatrix{Int64}, section::AbstractVector{Int64}, X::AbstractMatrix, smoothness) for section in sections])
+    end
+end
+
+struct BasisMatrixBlocks <: AbstractNestedMatrix
+    blocks::AbstractVector{BasisMatrix}
+    ncol::Int64
+    nrow::Int64
+end
+
+function BasisMatrixBlocks(basis_blocks::BasisBlocks, X::AbstractMatrix)
+    blocks = map(block -> BasisMatrix(block, X), basis_blocks.blocks)
+    ncol = sum(block.ncol for block in blocks)
+    nrow = blocks[1].nrow
+    BasisMatrixBlocks(blocks, ncol, nrow)
+end
+
+function mul(B::BasisMatrixBlocks, v::AbstractVector)
+    out = zeros(B.blocks[1].nrow)
+    for block in B.blocks
+        out .+= (block.l .* mul(block.F, v)) .- mul(block.F, block.r .* v)
+    end
+    return out
+end
+
+function Base.:*(B::BasisMatrixBlocks, v::AbstractVector)
+    sum(block.ncol for block in B.blocks) != length(v) && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
+    mul(B, v)
+end
+
+function Base.:*(B::BasisMatrixBlocks, V::AbstractMatrix)
+    sum(block.ncol for block in B.blocks) != size(V, 1) && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
+    reduce(hcat, mul(B, v) for v in eachcol(V))
+end
+
+getindex(B::BasisMatrixBlocks, inds...) = BasisMatrixBlocks([block[inds...] for block in B.blocks], B.ncol, length(inds...))
+
+struct BasisMatrixBlocksTranspose <: AbstractNestedMatrix
+    blocks::AbstractVector{BasisMatrixTranspose}
+    ncol::Int64
+    nrow::Int64
+end
+
+function mul(B::BasisMatrixBlocksTranspose, v::AbstractVector) # assumes B and v are compatible
+    reduce(vcat, map(block -> mul(block, v), B.blocks))
+end
+
+function Base.:*(B::BasisMatrixBlocksTranspose, v::AbstractVector)
+    B.blocks[1].ncol != length(v) && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
+    mul(B, v)
+end
+
+function Base.:*(B::BasisMatrixBlocksTranspose, V::AbstractMatrix)
+    B.blocks[1].ncol != size(V, 1) && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
+    reduce(hcat, mul(B, v) for v in eachcol(V))
+end
+
+transpose(B::BasisMatrixBlocks) = BasisMatrixBlocksTranspose(map(b -> transpose(b), B.blocks), B.nrow, B.ncol)
+transpose(B::BasisMatrixBlocksTranspose) = BasisMatrixBlocks(map(b -> transpose(b), B.blocks), B.nrow, B.ncol)
+
+getindex(B::BasisMatrixBlocksTranspose, inds...) = BasisMatrixBlocksTranspose([block[inds...] for block in B.blocks], length(inds...), B.nrow)
+
+
+### Extra Utility Functions
+
+function colmean(B::BasisMatrixBlocks)
+    mul(transpose(B), ones(B.nrow)) ./ B.nrow
+end
+
+function squares(B::BasisMatrixTranspose) # assumes B and v are compatible
+    out = zeros(B.F.nrow)
+    for i in 1:length(B.F.order)
+        if B.F.order[i] > B.F.nrow
+            continue
+        end
+        out[length(out) - B.F.order[i] + 1] += sum((B.l[i] .- B.r).^2)  # TODO: Change this to the square of the column value when higher-order implemented
+    end
+    return cumsum!(out, out)
+end
+
+function squares(B::BasisMatrixBlocksTranspose)
+    reduce(vcat, [squares(block) for block in B.blocks])
+end
+
+
 
 

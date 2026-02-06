@@ -80,6 +80,50 @@ y = vec(responsematrix(ct))
 
 end
 
+# Test BasisMatrix functionality
+@testset "BasisMatrix" begin
+    all_ranks = reduce(hcat, map(competerank, eachcol(Xm)))
+    smoothness = 1
+    indicator = Basis(all_ranks, [2], Xm, smoothness)
+    eye = Matrix(I, n, n)
+    # NestedMatrix
+    B = BasisMatrix(indicator, Xm)
+    v = ones(n)
+
+    # Construct the "true" sort
+    perm = reverse(sortperm(Xm[:, 2]))
+    B_true = (Xm[:, 2] .>= Xm[perm, 2]') .* (Xm[:, 2] .- Xm[perm, 2]') ./ factorial(smoothness)
+    @test B_true * ones(n) ≈ B * ones(n)
+    
+    v = randn(n)
+    @test B * v ≈ B_true * v
+    @test B * eye == B_true
+
+    # NestedMatrixTranspose
+    Bt = transpose(B)
+    @test Bt * ones(n) ≈ transpose(B_true) * ones(n)
+    @test Bt * v ≈ transpose(B_true) * v
+
+    # NestedMatrixBlocks
+    S = [[2], [2, 3]]
+    indb = NestedIndicatorBlocks(S, Xm)
+    Bb = NestedMatrixBlocks(indb, Xm)
+
+    ## Not there's no real ground truth here since we sample a random path,
+    ## plus we already tested the individual blocks, so we'll just test 
+    # that the additional block components function as expected
+    @test Bb.ncol == sum(Bb.blocks[i].ncol for i in 1:length(Bb.blocks))
+    @test Bb.nrow == n
+    @test all(sort(Bb * ones(Bb.ncol)) .< Bb.ncol)
+
+    # NestedMatrixBlocksTranspose
+    Bbt = transpose(Bb)
+    @test Bbt.ncol == n
+    @test Bbt.nrow == Bb.ncol
+    @test all(sort(Bbt * ones(Bbt.ncol)) .< Bbt.nrow)
+
+end
+
 @testset "Coordinate descent" begin
     # Set up inputs
     ycs = (y .- mean(y)) ./ sqrt(var(y, corrected=false))
@@ -88,6 +132,10 @@ end
     B = NestedMatrixBlocks(indb, Xm)
     μ = (transpose(B) * ones(B.nrow)) ./ n
     σ2 = (squares(transpose(B)) ./ B.nrow) .- (μ.^2)
+
+    (mul(transpose(B), ones(B.nrow)) ./ B.nrow) .- (μ .^ 2) ≈ σ2
+
+
     invσ = 1 ./ sqrt.(σ2)
     invσ[isinf.(invσ)] .= 0.0 
 
