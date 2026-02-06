@@ -278,7 +278,7 @@ struct Basis
     intercept::AbstractVector{Float64}
     function Basis(all_ranks::AbstractMatrix{Int64}, section::AbstractVector{Int64}, X::AbstractMatrix, smoothness::Int64)
         indicators = NestedIndicators(all_ranks, section, X)
-        intercept = vec(prod(X[indicators.path, section], dims = 2) .^ smoothness)
+        intercept = smoothness == 0 ? zeros(length(indicators.path)) : vec(prod(X[indicators.path, section], dims = 2) .^ smoothness)
         # Make sure the intercept is sorted because F multiplies from largest to smallest
         return new(indicators, smoothness, reverse(intercept))
     end
@@ -299,7 +299,7 @@ function BasisMatrix(B::Basis, X::AbstractMatrix)
     BasisMatrix(F, l, B.intercept, B.smoothness, F.ncol, F.nrow)
 end
 
-mul(B::BasisMatrix, v::AbstractVector) = (B.l .* mul(B.F, v)) .- mul(B.F, B.r .* v) ./ factorial(B.smoothness)
+mul(B::BasisMatrix, v::AbstractVector) = ((B.l .* mul(B.F, v)) .- mul(B.F, B.r .* v)) ./ factorial(B.smoothness)
 
 function Base.:*(B::BasisMatrix, v::AbstractVector)
     length(v) != B.ncol && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
@@ -323,7 +323,7 @@ struct BasisMatrixTranspose <: AbstractNestedMatrix
     nrow::Int64
 end
 
-mul(B::BasisMatrixTranspose, v::AbstractVector) = mul(B.F, B.l .* v) .- (B.r .* mul(B.F, v)) ./ factorial(B.smoothness)
+mul(B::BasisMatrixTranspose, v::AbstractVector) = (mul(B.F, B.l .* v) .- (B.r .* mul(B.F, v))) ./ factorial(B.smoothness)
 
 function Base.:*(B::BasisMatrixTranspose, v::AbstractVector)
     B.ncol != length(v) && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
@@ -366,7 +366,7 @@ function mul(B::BasisMatrixBlocks, v::AbstractVector, block_col_ind)
     block_ranges = [(block_starts[i-1]+1):block_starts[i] for i in 2:length(block_starts)]
     out = zeros(B.blocks[1].nrow)
     for (i, block) in enumerate(B.blocks)
-        out .+= (block.l .* mul(block.F, v[block_ranges[i]])) .- mul(block.F, block.r .* v[block_ranges[i]])
+        out .+= ((block.l .* mul(block.F, v[block_ranges[i]])) .- mul(block.F, block.r .* v[block_ranges[i]])) ./ factorial(block.smoothness)
     end
     return out
 end
@@ -417,15 +417,9 @@ function colmeans(B::BasisMatrixBlocks)
     mul(transpose(B), ones(B.nrow)) ./ B.nrow
 end
 
-function squares(B::BasisMatrixTranspose) # assumes B and v are compatible
-    out = zeros(B.F.nrow)
-    for i in 1:length(B.F.order)
-        if B.F.order[i] > B.F.nrow
-            continue
-        end
-        out[length(out) - B.F.order[i] + 1] += sum((B.l[i] .- B.r).^2)  # TODO: Change this to the square of the column value when higher-order implemented
-    end
-    return cumsum!(out, out)
+function squares(B::BasisMatrixTranspose)
+    v = ones(B.ncol)
+    return (mul(B.F, B.l.^2) .+ (B.r.^2 .* mul(B.F, v)) .- 2 .* B.r .* mul(B.F, B.l)) ./ (factorial(B.smoothness)^2)
 end
 
 function squares(B::BasisMatrixBlocksTranspose)

@@ -31,7 +31,7 @@ function update_coefficients!(indices, active::BitVector, β, β_unp, β_prev, �
     end
 end
 
-function cycle_coord!(active::BitVector, β, β_prev, X::NestedMatrixBlocks, r,
+function cycle_coord!(active::BitVector, β, β_prev, X::BasisMatrixBlocks, r,
                       μ, invσ, μinvσ, μinvσdif, 
                       lasso_penalty::Float64, ridge_penalty::Float64)
 

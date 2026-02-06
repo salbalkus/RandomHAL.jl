@@ -124,26 +124,30 @@ end
 
 end
 
-@testset "Coordinate descent" begin
+#@testset "Coordinate descent" begin
     # Set up inputs
-    smoothness = 1
+    smoothness = 0
     ycs = (y .- mean(y)) ./ sqrt(var(y, corrected=false))
     S = collect(combinations([2,3,4]))[2:end]
     indb = BasisBlocks(S, Xm, smoothness)
     B = BasisMatrixBlocks(indb, Xm)
     μ = colmeans(B)
     σ2 = (squares(transpose(B)) ./ B.nrow) .- (μ.^2)
-
-    (mul(transpose(B), ones(B.nrow)) ./ B.nrow) .- (μ .^ 2) ≈ σ2
-
-
     invσ = 1 ./ sqrt.(σ2)
     invσ[isinf.(invσ)] .= 0.0 
 
     # Test the scaling
     B2 = (B * Matrix(I, B.ncol, B.ncol))
-    B2c = (B2 .- reshape(μ, 1, B.ncol)) .* reshape(invσ, 1, B.ncol)
-    @test vec(mean(B2c .* B2c, dims=1))[invσ .!= 0.0] ≈ ones(B.ncol)[invσ .!= 0.0]
+
+    μ_true = vec(mean(B2, dims=1))
+    @test μ_true ≈ μ
+
+    σ2_true = vec(var(B2, corrected=false, dims=1))
+    @test σ2_true ≈ σ2
+
+    BT = (transpose(B) * Matrix(I, B.nrow, B.nrow))
+    @test transpose(B2) ≈ BT
+
 
     # Run the algorithm
     λ_range = [0.1, 0.01, 0.001, 0.0001]
