@@ -64,10 +64,11 @@ end
 struct NestedIndicators
     section::AbstractVector{Int64}
     bins::AbstractMatrix
+    path::AbstractVector{Int64}
     function NestedIndicators(all_ranks::AbstractMatrix{Int64}, section::AbstractVector{Int64}, X::AbstractMatrix)
         path = path_sample(all_ranks, section; start = 1)
         bins = vcat(X[path, section], fill(Inf, length(section))')
-        return new(section, bins)
+        return new(section, bins, path)
     end
 end
 
@@ -277,9 +278,9 @@ struct Basis
     intercept::AbstractVector{Float64}
     function Basis(all_ranks::AbstractMatrix{Int64}, section::AbstractVector{Int64}, X::AbstractMatrix, smoothness::Int64)
         indicators = NestedIndicators(all_ranks, section, X)
-        intercept = vec(prod(X[:, section], dims = 2) .^ smoothness)
+        intercept = vec(prod(X[indicators.path, section], dims = 2) .^ smoothness)
         # Make sure the intercept is sorted because F multiplies from largest to smallest
-        return new(indicators, smoothness, sort(intercept, rev=true))
+        return new(indicators, smoothness, reverse(intercept))
     end
 end
 
@@ -288,23 +289,25 @@ struct BasisMatrix <: AbstractNestedMatrix
     l::AbstractVector{Float64}
     r::AbstractVector{Float64}
     smoothness::Int64
+    ncol::Int64
+    nrow::Int64
 end
 
 function BasisMatrix(B::Basis, X::AbstractMatrix)
     F = NestedMatrix(B.indicators, X)
     l = vec(prod(X[:, B.indicators.section], dims = 2) .^ B.smoothness)
-    BasisMatrix(F, l, B.intercept, B.smoothness)
+    BasisMatrix(F, l, B.intercept, B.smoothness, F.ncol, F.nrow)
 end
 
 mul(B::BasisMatrix, v::AbstractVector) = (B.l .* mul(B.F, v)) .- mul(B.F, B.r .* v) ./ factorial(B.smoothness)
 
 function Base.:*(B::BasisMatrix, v::AbstractVector)
-    length(v) != B.F.ncol && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
+    length(v) != B.ncol && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
     mul(B, v)
 end
 
 function Base.:*(B::BasisMatrix, V::AbstractMatrix)
-    size(V, 1) != B.F.ncol && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
+    size(V, 1) != B.ncol && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
     reduce(hcat, mul(B, v) for v in eachcol(V))
 end
 
@@ -316,30 +319,32 @@ struct BasisMatrixTranspose <: AbstractNestedMatrix
     l::AbstractVector{Float64}
     r::AbstractVector{Float64}
     smoothness::Int64
+    ncol::Int64
+    nrow::Int64
 end
 
 mul(B::BasisMatrixTranspose, v::AbstractVector) = mul(B.F, B.l .* v) .- (B.r .* mul(B.F, v)) ./ factorial(B.smoothness)
 
 function Base.:*(B::BasisMatrixTranspose, v::AbstractVector)
-    B.F.ncol != length(v) && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
+    B.ncol != length(v) && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
     mul(B, v)
 end
 
 function Base.:*(B::BasisMatrixTranspose, V::AbstractMatrix)
-    size(V, 1) != B.F.ncol && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
+    size(V, 1) != B.ncol && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
     reduce(hcat, mul(B, v) for v in eachcol(V))
 end
 
 Base.getindex(B::BasisMatrixTranspose, inds...) = BasisMatrix(getindex(B.F, inds...), B.l[inds...], B.r[inds...], B.smoothness)
 # Transpose methods #
-transpose(B::BasisMatrix) = BasisMatrixTranspose(transpose(B.F), B.l, B.r, B.smoothness)
-transpose(B::BasisMatrixTranspose) = BasisMatrix(transpose(B.F), B.l, B.r, B.smoothness)
+transpose(B::BasisMatrix) = BasisMatrixTranspose(transpose(B.F), B.l, B.r, B.smoothness, B.nrow, B.ncol)
+transpose(B::BasisMatrixTranspose) = BasisMatrix(transpose(B.F), B.l, B.r, B.smoothness, B.nrow, B.ncol)
 
 struct BasisBlocks
     blocks::AbstractVector{Basis}
     function BasisBlocks(sections::AbstractVector{<:AbstractVector{Int64}}, X::AbstractMatrix, smoothness::Int64)
         all_ranks = reduce(hcat, map(competerank, eachcol(X)))
-        return new([Basis(all_ranks::AbstractMatrix{Int64}, section::AbstractVector{Int64}, X::AbstractMatrix, smoothness) for section in sections])
+        return new([Basis(all_ranks, section, X, smoothness) for section in sections])
     end
 end
 
@@ -352,26 +357,30 @@ end
 function BasisMatrixBlocks(basis_blocks::BasisBlocks, X::AbstractMatrix)
     blocks = map(block -> BasisMatrix(block, X), basis_blocks.blocks)
     ncol = sum(block.ncol for block in blocks)
-    nrow = blocks[1].nrow
+    nrow = blocks[1].F.nrow
     BasisMatrixBlocks(blocks, ncol, nrow)
 end
 
-function mul(B::BasisMatrixBlocks, v::AbstractVector)
+function mul(B::BasisMatrixBlocks, v::AbstractVector, block_col_ind)
+    block_starts = vcat([0], cumsum(block_col_ind))
+    block_ranges = [(block_starts[i-1]+1):block_starts[i] for i in 2:length(block_starts)]
     out = zeros(B.blocks[1].nrow)
-    for block in B.blocks
-        out .+= (block.l .* mul(block.F, v)) .- mul(block.F, block.r .* v)
+    for (i, block) in enumerate(B.blocks)
+        out .+= (block.l .* mul(block.F, v[block_ranges[i]])) .- mul(block.F, block.r .* v[block_ranges[i]])
     end
     return out
 end
 
 function Base.:*(B::BasisMatrixBlocks, v::AbstractVector)
-    sum(block.ncol for block in B.blocks) != length(v) && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
-    mul(B, v)
+    block_col_ind = map(block -> block.ncol, B.blocks)
+    sum(block_col_ind) != length(v) && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
+    mul(B, v, block_col_ind)
 end
 
 function Base.:*(B::BasisMatrixBlocks, V::AbstractMatrix)
-    sum(block.ncol for block in B.blocks) != size(V, 1) && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
-    reduce(hcat, mul(B, v) for v in eachcol(V))
+    block_col_ind = map(block -> block.ncol, B.blocks)
+    sum(block_col_ind) != size(V, 1) && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
+    reduce(hcat, mul(B, v, block_col_ind) for v in eachcol(V))
 end
 
 getindex(B::BasisMatrixBlocks, inds...) = BasisMatrixBlocks([block[inds...] for block in B.blocks], B.ncol, length(inds...))
@@ -387,12 +396,12 @@ function mul(B::BasisMatrixBlocksTranspose, v::AbstractVector) # assumes B and v
 end
 
 function Base.:*(B::BasisMatrixBlocksTranspose, v::AbstractVector)
-    B.blocks[1].ncol != length(v) && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
+    B.blocks[1].F.ncol != length(v) && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
     mul(B, v)
 end
 
 function Base.:*(B::BasisMatrixBlocksTranspose, V::AbstractMatrix)
-    B.blocks[1].ncol != size(V, 1) && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
+    B.blocks[1].F.ncol != size(V, 1) && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
     reduce(hcat, mul(B, v) for v in eachcol(V))
 end
 
@@ -404,7 +413,7 @@ getindex(B::BasisMatrixBlocksTranspose, inds...) = BasisMatrixBlocksTranspose([b
 
 ### Extra Utility Functions
 
-function colmean(B::BasisMatrixBlocks)
+function colmeans(B::BasisMatrixBlocks)
     mul(transpose(B), ones(B.nrow)) ./ B.nrow
 end
 

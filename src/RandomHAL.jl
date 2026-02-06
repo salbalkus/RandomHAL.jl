@@ -44,7 +44,7 @@ module RandomHAL
     include("fast_hal/fast_basis.jl")
     export NestedIndicators, NestedIndicatorBlocks, NestedMatrix, NestedMatrixBlocks 
     export Basis, BasisBlocks, BasisMatrix, BasisMatrixBlocks
-    export transpose, squares, *, mul, mul!
+    export transpose, colmeans, squares, *, mul, mul!
 
     include("fast_hal/fast_coord_descent.jl")
     export coord_descent

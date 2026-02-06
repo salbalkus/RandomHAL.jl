@@ -86,33 +86,33 @@ end
     smoothness = 1
     indicator = Basis(all_ranks, [2], Xm, smoothness)
     eye = Matrix(I, n, n)
-    # NestedMatrix
+    # BasisMatrix
     B = BasisMatrix(indicator, Xm)
     v = ones(n)
 
     # Construct the "true" sort
     perm = reverse(sortperm(Xm[:, 2]))
-    B_true = (Xm[:, 2] .>= Xm[perm, 2]') .* (Xm[:, 2] .- Xm[perm, 2]') ./ factorial(smoothness)
+    B_true = (Xm[:, 2] .>= Xm[perm, 2]') .* (Xm[:, 2] .- Xm[perm, 2]') ./ factorial(smoothness)    
     @test B_true * ones(n) ≈ B * ones(n)
     
     v = randn(n)
     @test B * v ≈ B_true * v
     @test B * eye == B_true
 
-    # NestedMatrixTranspose
+    # BasisMatrixTranspose
     Bt = transpose(B)
     @test Bt * ones(n) ≈ transpose(B_true) * ones(n)
     @test Bt * v ≈ transpose(B_true) * v
 
-    # NestedMatrixBlocks
+    # BasisMatrixBlocks
     S = [[2], [2, 3]]
-    indb = NestedIndicatorBlocks(S, Xm)
-    Bb = NestedMatrixBlocks(indb, Xm)
+    indb = BasisBlocks(S, Xm, 1)
+    Bb = BasisMatrixBlocks(indb, Xm)
 
     ## Not there's no real ground truth here since we sample a random path,
     ## plus we already tested the individual blocks, so we'll just test 
     # that the additional block components function as expected
-    @test Bb.ncol == sum(Bb.blocks[i].ncol for i in 1:length(Bb.blocks))
+    @test Bb.ncol == sum(Bb.blocks[i].F.ncol for i in 1:length(Bb.blocks))
     @test Bb.nrow == n
     @test all(sort(Bb * ones(Bb.ncol)) .< Bb.ncol)
 
@@ -126,11 +126,12 @@ end
 
 @testset "Coordinate descent" begin
     # Set up inputs
+    smoothness = 1
     ycs = (y .- mean(y)) ./ sqrt(var(y, corrected=false))
     S = collect(combinations([2,3,4]))[2:end]
-    indb = NestedIndicatorBlocks(S, Xm)
-    B = NestedMatrixBlocks(indb, Xm)
-    μ = (transpose(B) * ones(B.nrow)) ./ n
+    indb = BasisBlocks(S, Xm, smoothness)
+    B = BasisMatrixBlocks(indb, Xm)
+    μ = colmeans(B)
     σ2 = (squares(transpose(B)) ./ B.nrow) .- (μ.^2)
 
     (mul(transpose(B), ones(B.nrow)) ./ B.nrow) .- (μ .^ 2) ≈ σ2
