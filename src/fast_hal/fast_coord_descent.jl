@@ -7,55 +7,56 @@ pct_change(next_loss::Float64, prev_loss::Float64) = abs(next_loss - prev_loss) 
 
 # This function currently produces a lot of allocations. 
 # May be able to reduce these with clever programming tricks
-function update_coefficients!(indices, active::BitVector, β, β_unp, β_prev, μinvσdif, μinvσ, lasso_penalty::Float64, ridge_penalty::Float64, cur_ind::Int64)
+function update_coefficients!(indices, active::BitVector, β, β_unp, β_prev, cumsum_squares, lasso_penalty::Float64, ridge_penalty::Float64, cur_ind::Int64, n)
     
-    Δ_r = 0
     Δ = 0
 
     # Sequentially update residuals within the union of the current block and the active set and soft-threshold
-    # WARNING: This loop produces most of the allocations in this function, because it's about 20 allocations per coefficient
     for k in indices
         if active[k]
             # These variables help track the sequential change in residuals
             # for fast O(n) computation
             #Δ = (1 - μ[k])*invσ[k]*Δ_r
-            Δ = μinvσdif[k]*Δ_r
 
+            #Δ = μinvσdif[k]*Δ_r
+            i = k - cur_ind + 1
             # Apply the lasso thresholding
-            β[k] = soft_threshold(β_unp[k - cur_ind + 1] - Δ, lasso_penalty) / ridge_penalty
+            β[k] = soft_threshold(β_unp[i] - Δ, lasso_penalty) / ridge_penalty
 
             # Update the change in residuals to avoid recomputing every subsequent coefficient
+            # THIS IS BROKEN FOR HIGHER ORDER SMOOTHNESS; NEED TO ACCOUNT FOR VALUE IN COLUMN
             #Δ_r += μ[k] * invσ[k] * (β[k] - β_prev)
-            Δ_r += μinvσ[k] * (β[k] - β_prev[k])   
+            #Δ_r += μinvσ[k] * (β[k] - β_prev[k])   
+
+            Δβ = β[k] - β_prev[k]   
+            Δ += Δβ * cumsum_squares[i]
         end
     end
 end
 
 function cycle_coord!(active::BitVector, β, β_prev, X::BasisMatrixBlocks, r,
-                      μ, invσ, μinvσ, μinvσdif, 
+                      cumsum_squares, 
                       lasso_penalty::Float64, ridge_penalty::Float64)
 
     cur_ind  = 1
     #r = (y .- X * (β .* invσ)) .+ sum(μ .* β .* invσ)
-    for XB in X.blocks
+    for (b, XB) in enumerate(X.blocks)
         # Compute residuals for entire basis.
         # Fast nesting structure requires we sum over all of the coefficients anyways,
         # so we don't skip inactive set for the high-level residual computation.
         # (could technically exclude inactive tails, but this introduces its own nontrivial overhead) 
-        #r .= X * (β .* invσ)
-        #r .= (y .- r) .+ sum(μ .* β .* invσ)
 
         # Get the coefficient indices for the current block
         indices = cur_ind:(cur_ind + XB.ncol - 1)
 
         # Compute unpenalized coefficient update for entire block
-        β_unp = ((((transpose(XB) * r)  .- (view(μ, indices).*sum(r))) .* view(invσ, indices))./ XB.nrow) .+ view(β, indices)
+        β_unp = view(β, indices) .+ ((transpose(XB) * r) ./ XB.nrow)#((((transpose(XB) * r)  .- (view(μ, indices).*sum(r))) .* view(invσ, indices))./ XB.nrow) .+ 
 
-        update_coefficients!(indices, active, β, β_unp, β_prev, μinvσdif, μinvσ, lasso_penalty, ridge_penalty, cur_ind)
+        update_coefficients!(indices, active, β, β_unp, β_prev, cumsum_squares[b], lasso_penalty, ridge_penalty, cur_ind, X.nrow)
         
-        dif = (view(β, indices)  - view(β_prev, indices)) .* view(invσ, indices)
+        dif = (view(β, indices)  - view(β_prev, indices))# .* view(invσ, indices)
         r .-= XB * dif
-        r .+= sum(view(μ, indices) .* dif)
+        #r .+= sum(view(μ, indices) .* dif)
 
         # Update indices to the next block
         cur_ind += XB.ncol
@@ -70,12 +71,15 @@ function coord_descent(X::BasisMatrixBlocks, y::Vector{Float64}, μ::Vector{Floa
     n == length(y) || error("Number of rows in X must match length of y")
 
     # Compute inverse standard deviation for scaling
-    invσ = 1 ./ sqrt.(σ2) # This is right
-    invσ[isinf.(invσ)] .= 0.0  # Handle zero-variance basis functions
+    #invσ = 1 ./ sqrt.(σ2) # This is right
+    #invσ[isinf.(invσ)] .= 0.0  # Handle zero-variance basis functions
 
     # Precompute some quantities for cycling
-    μinvσ = μ .* invσ
-    μinvσdif = invσ .- μinvσ
+    cumsum_squares = []
+    for XB in X.blocks
+        ord = reverse(sortperm(XB.F.order))
+        push!(cumsum_squares, cumsum(XB.l[ord].^2) ./ n)
+    end
 
     # Set up storage for coefficients
     β = Matrix{Float64}(undef, d, length(λ_range))
@@ -124,7 +128,7 @@ function coord_descent(X::BasisMatrixBlocks, y::Vector{Float64}, μ::Vector{Floa
         outer_iteration = 1
 
         # Run an initial uFpdate
-        cycle_coord!(trues(d), β_next, β_prev, X, r, μ, invσ, μinvσ, μinvσdif, lasso_penalty, ridge_penalty)
+        cycle_coord!(trues(d), β_next, β_prev, X, r, cumsum_squares, lasso_penalty, ridge_penalty)
         β_prev .= β_next
         # Begin iterative descent
         while (outer_iteration < outer_max_iters)
@@ -134,7 +138,7 @@ function coord_descent(X::BasisMatrixBlocks, y::Vector{Float64}, μ::Vector{Floa
             # Update active set until convergence
             inner_iteration = 1
             while (inner_iteration < inner_max_iters) && (norm_next > tol)
-                cycle_coord!(active, β_next, β_prev, X, r, μ, invσ, μinvσ, μinvσdif, lasso_penalty, ridge_penalty)
+                cycle_coord!(active, β_next, β_prev, X, r, cumsum_squares, lasso_penalty, ridge_penalty)
 
                 # Track convergence
                 norm_next = conv_crit(β_prev, β_next, σ2)
@@ -146,7 +150,7 @@ function coord_descent(X::BasisMatrixBlocks, y::Vector{Float64}, μ::Vector{Floa
             #inner_total_tracker += inner_iteration
 
             # One more cycle over all variables to assess if active set changes
-            cycle_coord!(trues(d), β_next, β_prev, X, r, μ, invσ, μinvσ, μinvσdif, lasso_penalty, ridge_penalty)
+            cycle_coord!(trues(d), β_next, β_prev, X, r, cumsum_squares, lasso_penalty, ridge_penalty)
             next_active .= β_next .!= 0
             
             # If the active set has not changed, then we're done. Otherwise, keep going

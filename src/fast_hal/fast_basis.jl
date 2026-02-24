@@ -299,7 +299,7 @@ function BasisMatrix(B::Basis, X::AbstractMatrix)
     BasisMatrix(F, l, B.intercept, B.smoothness, F.ncol, F.nrow)
 end
 
-mul(B::BasisMatrix, v::AbstractVector) = ((B.l .* mul(B.F, v)) .- mul(B.F, B.r .* v)) ./ factorial(B.smoothness)
+mul(B::BasisMatrix, v::AbstractVector) = (B.l .* mul(B.F, v))#((B.l .* mul(B.F, v)) .- mul(B.F, B.r .* v)) ./ factorial(B.smoothness)
 
 function Base.:*(B::BasisMatrix, v::AbstractVector)
     length(v) != B.ncol && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
@@ -323,7 +323,7 @@ struct BasisMatrixTranspose <: AbstractNestedMatrix
     nrow::Int64
 end
 
-mul(B::BasisMatrixTranspose, v::AbstractVector) = (mul(B.F, B.l .* v) .- (B.r .* mul(B.F, v))) ./ factorial(B.smoothness)
+mul(B::BasisMatrixTranspose, v::AbstractVector) = mul(B.F, B.l .* v)#(mul(B.F, B.l .* v) .- (B.r .* mul(B.F, v))) ./ factorial(B.smoothness)
 
 function Base.:*(B::BasisMatrixTranspose, v::AbstractVector)
     B.ncol != length(v) && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
@@ -366,7 +366,7 @@ function mul(B::BasisMatrixBlocks, v::AbstractVector, block_col_ind)
     block_ranges = [(block_starts[i-1]+1):block_starts[i] for i in 2:length(block_starts)]
     out = zeros(B.blocks[1].nrow)
     for (i, block) in enumerate(B.blocks)
-        out .+= ((block.l .* mul(block.F, v[block_ranges[i]])) .- mul(block.F, block.r .* v[block_ranges[i]])) ./ factorial(block.smoothness)
+        out .+= (block.l .* mul(block.F, v[block_ranges[i]]))#((block.l .* mul(block.F, v[block_ranges[i]])) .- mul(block.F, block.r .* v[block_ranges[i]])) ./ factorial(block.smoothness)
     end
     return out
 end

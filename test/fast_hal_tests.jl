@@ -16,15 +16,15 @@ using RandomHAL
 Random.seed!(1234)
 
 dgp = @dgp(
-        X1 ~ Bernoulli(0.5),
+        #X1 ~ Bernoulli(0.5),
         X2 ~ Beta(1, 1),
         X3 ~ Beta(1, 1),
         X4 ~ Beta(1, 1),
-        X5 ~ Normal.(X2, 0.01),
-        X6 ~ Normal.(X3 .* (1 .- (2 .*X1)), 0.001),
-        X7 ~ Normal.(sin.(2*pi*X2), 0.0001),
-        X8 ~ Normal.(1 .- cos.(2*pi*X2), 0.0001),
-        X9 ~ Normal.((X3 .- 0.5) .* ((X3 .> 0.5) - (X3 .< 0.5)), 0.0),
+        #X5 ~ Normal.(X2, 0.01),
+        #X6 ~ Normal.(X3 .* (1 .- (2 .*X1)), 0.001),
+        #X7 ~ Normal.(sin.(2*pi*X2), 0.0001),
+        #X8 ~ Normal.(1 .- cos.(2*pi*X2), 0.0001),
+        #X9 ~ Normal.((X3 .- 0.5) .* ((X3 .> 0.5) - (X3 .< 0.5)), 0.0),
 
         A ~ (@. Bernoulli(logistic((X2 + X2^2 + X3 + X3^2 + X4 + X4^2 + X2 * X3) - 2.5))),
         #Y ~ (@. Normal(A + X2 * X3 + A * X2 + A * X4 + 0.2 * (sqrt(10*X3*X4) + sqrt(10 * X2) + sqrt(10 * X3) + sqrt(10*X4)), 0.01))
@@ -126,7 +126,7 @@ end
 
 #@testset "Coordinate descent" begin
     # Set up inputs
-    smoothness = 0
+    smoothness = 1
     ycs = (y .- mean(y)) ./ sqrt(var(y, corrected=false))
     S = collect(combinations([2,3,4]))[2:end]
     indb = BasisBlocks(S, Xm, smoothness)
@@ -151,7 +151,7 @@ end
 
     # Run the algorithm
     λ_range = [0.1, 0.01, 0.001, 0.0001]
-    path = coord_descent(B, ycs, μ, σ2, λ_range; outer_max_iters = 1000, inner_max_iters = 1000, tol = 10e-7)
+    path = coord_descent(B, ycs, μ_true, σ2_true, λ_range; outer_max_iters = 1000, inner_max_iters = 1000, tol = 10e-7)
     # Make sure we get close to a reasonable solution
     
     path_scaled = path .* invσ
