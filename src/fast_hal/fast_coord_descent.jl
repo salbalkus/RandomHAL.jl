@@ -7,40 +7,64 @@ pct_change(next_loss::Float64, prev_loss::Float64) = abs(next_loss - prev_loss) 
 
 # This function currently produces a lot of allocations. 
 # May be able to reduce these with clever programming tricks
-function update_coefficients!(indices, active::BitVector, β, β_unp, β_prev, cumsum_squares, lasso_penalty::Float64, ridge_penalty::Float64, cur_ind::Int64, n)
+function update_coefficients!(indices, active::BitVector, β, β_unp, β_prev, l_sum, l_squares, r_shift, μ, invσ, lasso_penalty::Float64, ridge_penalty::Float64, cur_ind::Int64, n)
     
+    # These variables help track the sequential change in residuals
+    # for fast O(n) computation
     Δ = 0
+    Δ_intercept_part = 0
+    Δ_scaled_part = 0
+    Δ_μ1 = 0
+    Δ_μ2 = 0
+    Δ_μ3 = 0
+    k_max = indices[end]
 
     # Sequentially update residuals within the union of the current block and the active set and soft-threshold
     for k in indices
         if active[k]
-            # These variables help track the sequential change in residuals
-            # for fast O(n) computation
-            #Δ = (1 - μ[k])*invσ[k]*Δ_r
 
-            #Δ = μinvσdif[k]*Δ_r
             i = k - cur_ind + 1
+            # ΔA appears correct, I think ΔB is incorrect
+            ΔA = (Δ_intercept_part + (r_shift[k] * Δ_scaled_part)) 
+            ΔB = Δ_μ1*(l_sum[k] - i*r_shift[k]) - Δ_μ2*μ[k] + Δ_μ3*μ[k]
+            Δ = (invσ[k]*ΔA) - (invσ[k]*ΔB)
+
             # Apply the lasso thresholding
             β[k] = soft_threshold(β_unp[i] - Δ, lasso_penalty) / ridge_penalty
+ 
 
-            # Update the change in residuals to avoid recomputing every subsequent coefficient
-            # THIS IS BROKEN FOR HIGHER ORDER SMOOTHNESS; NEED TO ACCOUNT FOR VALUE IN COLUMN
-            #Δ_r += μ[k] * invσ[k] * (β[k] - β_prev)
-            #Δ_r += μinvσ[k] * (β[k] - β_prev[k])   
+            #if k < k_max
+            #    Δβ = β[k] - β_prev[k]  
+                
+            #    Δ -= invσ[k+1] * invσ[k] * Δβ * (l_squares[k] - (r_shift[k]*l_sum[k]) - (r_shift[k+1]*l_sum[k]) + (i*(r_shift[k+1]*r_shift[k]))) / n
 
-            Δβ = β[k] - β_prev[k]   
-            Δ += Δβ * cumsum_squares[i]
+                # These have been checked against truth. We are correctly centering
+            #    Δ_μ1 = μ[k]*(l_sum[k+1] - (i+1)*r_shift[k+1]) # unscaled update of XT * 1μT * β
+            #    Δ_μ2 = μ[k+1]*(l_sum[k] - i*r_shift[k]) # unscaled update of μ1T * X * β
+            #    Δ_μ3 = n*μ[k]*μ[k+1] # unscaled update of μ1T * 1μT * β; weird thing is that Δ_μ1 = Δμ2 = Δ_μ3 in testing
+            #    Δ += Δβ * invσ[k+1]*invσ[k]*(Δ_μ1 - Δ_μ2 + Δ_μ3) / n
+            #end
+
+            # The current error is that this doesn't work for interaction terms (overestimates)
+            invσΔβ            =  invσ[k] * (β[k] - β_prev[k]) / n
+            Δ_intercept_part +=  invσΔβ * (l_squares[k] - r_shift[k]*l_sum[k])
+            Δ_scaled_part    +=  invσΔβ * (i*r_shift[k] - l_sum[k])
+
+            Δ_μ1 += invσΔβ * μ[k]
+            Δ_μ2 += invσΔβ * (l_sum[k] - i*r_shift[k])
+            Δ_μ3 += invσΔβ * n * μ[k]
+
         end
     end
 end
 
-function cycle_coord!(active::BitVector, β, β_prev, X::BasisMatrixBlocks, r,
-                      cumsum_squares, 
+function cycle_coord!(active::BitVector, β, β_prev, X::BasisMatrixBlocks, res,
+                      l_sum, l_squares, r_shift, μ, invσ,
                       lasso_penalty::Float64, ridge_penalty::Float64)
 
     cur_ind  = 1
     #r = (y .- X * (β .* invσ)) .+ sum(μ .* β .* invσ)
-    for (b, XB) in enumerate(X.blocks)
+    for XB in X.blocks
         # Compute residuals for entire basis.
         # Fast nesting structure requires we sum over all of the coefficients anyways,
         # so we don't skip inactive set for the high-level residual computation.
@@ -50,13 +74,15 @@ function cycle_coord!(active::BitVector, β, β_prev, X::BasisMatrixBlocks, r,
         indices = cur_ind:(cur_ind + XB.ncol - 1)
 
         # Compute unpenalized coefficient update for entire block
-        β_unp = view(β, indices) .+ ((transpose(XB) * r) ./ XB.nrow)#((((transpose(XB) * r)  .- (view(μ, indices).*sum(r))) .* view(invσ, indices))./ XB.nrow) .+ 
+        β_unp = view(β, indices) .+ ((((transpose(XB) * res)  .- (view(μ, indices).*sum(res))) .* view(invσ, indices))./ XB.nrow)
 
-        update_coefficients!(indices, active, β, β_unp, β_prev, cumsum_squares[b], lasso_penalty, ridge_penalty, cur_ind, X.nrow)
-        
-        dif = (view(β, indices)  - view(β_prev, indices))# .* view(invσ, indices)
-        r .-= XB * dif
-        #r .+= sum(view(μ, indices) .* dif)
+        # The line below doesn't work for smoothness 2 or higher
+        update_coefficients!(indices, active, β, β_unp, β_prev, l_sum, l_squares, r_shift, μ, invσ, lasso_penalty, ridge_penalty, cur_ind, X.nrow)
+
+        # Update residuals in-place
+        dif = (view(β, indices)  - view(β_prev, indices)) .* view(invσ, indices)
+        res .-= XB * dif
+        res .+= sum(view(μ, indices) .* dif)
 
         # Update indices to the next block
         cur_ind += XB.ncol
@@ -71,15 +97,13 @@ function coord_descent(X::BasisMatrixBlocks, y::Vector{Float64}, μ::Vector{Floa
     n == length(y) || error("Number of rows in X must match length of y")
 
     # Compute inverse standard deviation for scaling
-    #invσ = 1 ./ sqrt.(σ2) # This is right
-    #invσ[isinf.(invσ)] .= 0.0  # Handle zero-variance basis functions
+    invσ = 1 ./ sqrt.(σ2) # This is right
+    invσ[isinf.(invσ)] .= 0.0  # Handle zero-variance basis functions
 
     # Precompute some quantities for cycling
-    cumsum_squares = []
-    for XB in X.blocks
-        ord = reverse(sortperm(XB.F.order))
-        push!(cumsum_squares, cumsum(XB.l[ord].^2) ./ n)
-    end
+    l_sum = left_sum(transpose(X))
+    l_squares = left_squares(transpose(X))
+    r_shift = reduce(vcat, XB.r for XB in X.blocks)
 
     # Set up storage for coefficients
     β = Matrix{Float64}(undef, d, length(λ_range))
@@ -95,7 +119,7 @@ function coord_descent(X::BasisMatrixBlocks, y::Vector{Float64}, μ::Vector{Floa
     #end
     β_prev = zeros(d)
     β_next = copy(β_prev)
-    r = copy(y)
+    res = copy(y)
 
     # Change behavior if we've provided an entire path of warm starts
     #outer_total_tracker = 0
@@ -127,8 +151,8 @@ function coord_descent(X::BasisMatrixBlocks, y::Vector{Float64}, μ::Vector{Floa
         next_active = copy(active)
         outer_iteration = 1
 
-        # Run an initial uFpdate
-        cycle_coord!(trues(d), β_next, β_prev, X, r, cumsum_squares, lasso_penalty, ridge_penalty)
+        # Run an initial update
+        cycle_coord!(trues(d), β_next, β_prev, X, res, l_sum, l_squares, r_shift, μ, invσ, lasso_penalty, ridge_penalty)
         β_prev .= β_next
         # Begin iterative descent
         while (outer_iteration < outer_max_iters)
@@ -138,7 +162,7 @@ function coord_descent(X::BasisMatrixBlocks, y::Vector{Float64}, μ::Vector{Floa
             # Update active set until convergence
             inner_iteration = 1
             while (inner_iteration < inner_max_iters) && (norm_next > tol)
-                cycle_coord!(active, β_next, β_prev, X, r, cumsum_squares, lasso_penalty, ridge_penalty)
+                cycle_coord!(active, β_next, β_prev, X, res, l_sum, l_squares, r_shift, μ, invσ, lasso_penalty, ridge_penalty)
 
                 # Track convergence
                 norm_next = conv_crit(β_prev, β_next, σ2)
@@ -150,7 +174,7 @@ function coord_descent(X::BasisMatrixBlocks, y::Vector{Float64}, μ::Vector{Floa
             #inner_total_tracker += inner_iteration
 
             # One more cycle over all variables to assess if active set changes
-            cycle_coord!(trues(d), β_next, β_prev, X, r, cumsum_squares, lasso_penalty, ridge_penalty)
+            cycle_coord!(trues(d), β_next, β_prev, X, res, l_sum, l_squares, r_shift, μ, invσ, lasso_penalty, ridge_penalty)
             next_active .= β_next .!= 0
             
             # If the active set has not changed, then we're done. Otherwise, keep going

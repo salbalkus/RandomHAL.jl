@@ -28,7 +28,7 @@ dgp = @dgp(
 
         A ~ (@. Bernoulli(logistic((X2 + X2^2 + X3 + X3^2 + X4 + X4^2 + X2 * X3) - 2.5))),
         #Y ~ (@. Normal(A + X2 * X3 + A * X2 + A * X4 + 0.2 * (sqrt(10*X3*X4) + sqrt(10 * X2) + sqrt(10 * X3) + sqrt(10*X4)), 0.01))
-        Y ~ (@. Normal(sin.(2*pi * X2) + sin(2*pi*X3) + sin(2*pi*X4), 0.1))
+        Y ~ (@. Normal(sin.(2*pi * X2), 0.1))# + sin(2*pi*X3) + sin(2*pi*X4), 0.1))
     )
 scm = StructuralCausalModel(dgp, :A, :Y)
 n = 100
@@ -83,7 +83,7 @@ end
 # Test BasisMatrix functionality
 @testset "BasisMatrix" begin
     all_ranks = reduce(hcat, map(competerank, eachcol(Xm)))
-    smoothness = 1
+    smoothness = 2
     indicator = Basis(all_ranks, [2], Xm, smoothness)
     eye = Matrix(I, n, n)
     # BasisMatrix
@@ -92,7 +92,7 @@ end
 
     # Construct the "true" sort
     perm = reverse(sortperm(Xm[:, 2]))
-    B_true = (Xm[:, 2] .>= Xm[perm, 2]') .* (Xm[:, 2] .- Xm[perm, 2]') ./ factorial(smoothness)    
+    B_true = (Xm[:, 2] .>= Xm[perm, 2]') .* (Xm[:, 2].^smoothness .- (Xm[perm, 2].^smoothness)') ./ factorial(smoothness)    
     @test B_true * ones(n) ≈ B * ones(n)
     
     v = randn(n)
@@ -126,9 +126,10 @@ end
 
 #@testset "Coordinate descent" begin
     # Set up inputs
-    smoothness = 1
+    smoothness = 2
     ycs = (y .- mean(y)) ./ sqrt(var(y, corrected=false))
-    S = collect(combinations([2,3,4]))[2:end]
+    S = collect(combinations([1,2,3]))[2:end]
+    S = [[1]]
     indb = BasisBlocks(S, Xm, smoothness)
     B = BasisMatrixBlocks(indb, Xm)
     μ = colmeans(B)
@@ -151,11 +152,15 @@ end
 
     # Run the algorithm
     λ_range = [0.1, 0.01, 0.001, 0.0001]
-    path = coord_descent(B, ycs, μ_true, σ2_true, λ_range; outer_max_iters = 1000, inner_max_iters = 1000, tol = 10e-7)
+    # WORKS FOR all 0th-order and 1D 1st-order smoothness, but nothing higher
+    # ANOTHER PROBLEM: Higher-order smoothness requires increasingly lower and lower tolerance to match the glmnet
+    # Not sure why that is
+    path = coord_descent(B, ycs, μ_true, σ2_true, λ_range; outer_max_iters = 1000, inner_max_iters = 1000, tol = 10e-11)
     # Make sure we get close to a reasonable solution
     
     path_scaled = path .* invσ
     preds = B * path_scaled .- (reshape(μ, 1, B.ncol) * path_scaled)# .+ mean(y)
+
     mse = [mean((preds[:, i] .- ycs).^2) for i in 1:size(path, 2)]
     @test all(mse .< 0.5)
     @test mse[2] < mse[1]
@@ -164,13 +169,17 @@ end
 
     # How close are we to GLMNet?
     B2 = (B * Matrix(I, B.ncol, B.ncol))
-    glmnet_fit = glmnet(B2, ycs, lambda = λ_range, intercept = false)
+    glmnet_fit = glmnet(B2, ycs, lambda = λ_range, intercept = true)
     glmnet_preds = GLMNet.predict(glmnet_fit, B2)
 
     glmnet_mse = [mean((GLMNet.predict(glmnet_fit, B2)[:, i] .- ycs).^2) for i in 1:length(λ_range)]
 
     abs_diff = abs.(glmnet_mse .- mse)
     @test all(abs_diff .< 0.01)
+
+    scatter(Xm[:, 1], ycs)
+    scatter!(Xm[:, 1], preds[:, 3])
+    scatter!(Xm[:, 1], glmnet_preds[:, 3])
 
 end
 
