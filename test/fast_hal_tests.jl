@@ -28,7 +28,7 @@ dgp = @dgp(
 
         A ~ (@. Bernoulli(logistic((X2 + X2^2 + X3 + X3^2 + X4 + X4^2 + X2 * X3) - 2.5))),
         #Y ~ (@. Normal(A + X2 * X3 + A * X2 + A * X4 + 0.2 * (sqrt(10*X3*X4) + sqrt(10 * X2) + sqrt(10 * X3) + sqrt(10*X4)), 0.01))
-        Y ~ (@. Normal(sin.(2*pi * X2), 0.1))# + sin(2*pi*X3) + sin(2*pi*X4), 0.1))
+        Y ~ (@. Normal(sin.(2*pi * X2) + sin(2*pi*X3) + sin(2*pi*X4), 0.1))
     )
 scm = StructuralCausalModel(dgp, :A, :Y)
 n = 100
@@ -126,10 +126,10 @@ end
 
 #@testset "Coordinate descent" begin
     # Set up inputs
-    smoothness = 2
+    smoothness = 1
     ycs = (y .- mean(y)) ./ sqrt(var(y, corrected=false))
     S = collect(combinations([1,2,3]))[2:end]
-    S = [[1]]
+    #S = [[1]]
     indb = BasisBlocks(S, Xm, smoothness)
     B = BasisMatrixBlocks(indb, Xm)
     μ = colmeans(B)
@@ -151,11 +151,11 @@ end
 
 
     # Run the algorithm
-    λ_range = [0.1, 0.01, 0.001, 0.0001]
+    λ_range = [0.1, 0.01, 0.001, 0.000001]
     # WORKS FOR all 0th-order and 1D 1st-order smoothness, but nothing higher
     # ANOTHER PROBLEM: Higher-order smoothness requires increasingly lower and lower tolerance to match the glmnet
-    # Not sure why that is
-    path = coord_descent(B, ycs, μ_true, σ2_true, λ_range; outer_max_iters = 1000, inner_max_iters = 1000, tol = 10e-11)
+    # Not sure why that is; maybe because we're using a "percentage change" metric for convergence?
+    path = coord_descent(B, ycs, μ_true, σ2_true, λ_range; outer_max_iters = 1000, inner_max_iters = 1000, tol = 10e-14)
     # Make sure we get close to a reasonable solution
     
     path_scaled = path .* invσ

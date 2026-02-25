@@ -7,7 +7,7 @@ pct_change(next_loss::Float64, prev_loss::Float64) = abs(next_loss - prev_loss) 
 
 # This function currently produces a lot of allocations. 
 # May be able to reduce these with clever programming tricks
-function update_coefficients!(indices, active::BitVector, β, β_unp, β_prev, l_sum, l_squares, r_shift, μ, invσ, lasso_penalty::Float64, ridge_penalty::Float64, cur_ind::Int64, n)
+function update_coefficients!(indices, active::BitVector, β, β_unp, β_prev, l_sum, l_squares, r_shift, nz_count, μ, invσ, lasso_penalty::Float64, ridge_penalty::Float64, cur_ind::Int64, n)
     
     # These variables help track the sequential change in residuals
     # for fast O(n) computation
@@ -26,7 +26,7 @@ function update_coefficients!(indices, active::BitVector, β, β_unp, β_prev, l
             i = k - cur_ind + 1
             # ΔA appears correct, I think ΔB is incorrect
             ΔA = (Δ_intercept_part + (r_shift[k] * Δ_scaled_part)) 
-            ΔB = Δ_μ1*(l_sum[k] - i*r_shift[k]) - Δ_μ2*μ[k] + Δ_μ3*μ[k]
+            ΔB = Δ_μ1*(l_sum[k] - nz_count[k]*r_shift[k]) - Δ_μ2*μ[k] + Δ_μ3*μ[k]
             Δ = (invσ[k]*ΔA) - (invσ[k]*ΔB)
 
             # Apply the lasso thresholding
@@ -48,10 +48,12 @@ function update_coefficients!(indices, active::BitVector, β, β_unp, β_prev, l
             # The current error is that this doesn't work for interaction terms (overestimates)
             invσΔβ            =  invσ[k] * (β[k] - β_prev[k]) / n
             Δ_intercept_part +=  invσΔβ * (l_squares[k] - r_shift[k]*l_sum[k])
-            Δ_scaled_part    +=  invσΔβ * (i*r_shift[k] - l_sum[k])
+            Δ_scaled_part    +=  invσΔβ * (nz_count[k]*r_shift[k] - l_sum[k])
 
             Δ_μ1 += invσΔβ * μ[k]
-            Δ_μ2 += invσΔβ * (l_sum[k] - i*r_shift[k])
+            Δ_μ2 += invσΔβ * (l_sum[k] - nz_count[k]*r_shift[k])
+
+            # Does this n need to be adjusted?
             Δ_μ3 += invσΔβ * n * μ[k]
 
         end
@@ -59,7 +61,7 @@ function update_coefficients!(indices, active::BitVector, β, β_unp, β_prev, l
 end
 
 function cycle_coord!(active::BitVector, β, β_prev, X::BasisMatrixBlocks, res,
-                      l_sum, l_squares, r_shift, μ, invσ,
+                      l_sum, l_squares, r_shift, nz_count, μ, invσ,
                       lasso_penalty::Float64, ridge_penalty::Float64)
 
     cur_ind  = 1
@@ -77,7 +79,7 @@ function cycle_coord!(active::BitVector, β, β_prev, X::BasisMatrixBlocks, res,
         β_unp = view(β, indices) .+ ((((transpose(XB) * res)  .- (view(μ, indices).*sum(res))) .* view(invσ, indices))./ XB.nrow)
 
         # The line below doesn't work for smoothness 2 or higher
-        update_coefficients!(indices, active, β, β_unp, β_prev, l_sum, l_squares, r_shift, μ, invσ, lasso_penalty, ridge_penalty, cur_ind, X.nrow)
+        update_coefficients!(indices, active, β, β_unp, β_prev, l_sum, l_squares, r_shift, nz_count, μ, invσ, lasso_penalty, ridge_penalty, cur_ind, X.nrow)
 
         # Update residuals in-place
         dif = (view(β, indices)  - view(β_prev, indices)) .* view(invσ, indices)
@@ -104,6 +106,7 @@ function coord_descent(X::BasisMatrixBlocks, y::Vector{Float64}, μ::Vector{Floa
     l_sum = left_sum(transpose(X))
     l_squares = left_squares(transpose(X))
     r_shift = reduce(vcat, XB.r for XB in X.blocks)
+    nz_count = nonzero_count(transpose(X))
 
     # Set up storage for coefficients
     β = Matrix{Float64}(undef, d, length(λ_range))
@@ -152,7 +155,7 @@ function coord_descent(X::BasisMatrixBlocks, y::Vector{Float64}, μ::Vector{Floa
         outer_iteration = 1
 
         # Run an initial update
-        cycle_coord!(trues(d), β_next, β_prev, X, res, l_sum, l_squares, r_shift, μ, invσ, lasso_penalty, ridge_penalty)
+        cycle_coord!(trues(d), β_next, β_prev, X, res, l_sum, l_squares, r_shift, nz_count, μ, invσ, lasso_penalty, ridge_penalty)
         β_prev .= β_next
         # Begin iterative descent
         while (outer_iteration < outer_max_iters)
@@ -162,7 +165,7 @@ function coord_descent(X::BasisMatrixBlocks, y::Vector{Float64}, μ::Vector{Floa
             # Update active set until convergence
             inner_iteration = 1
             while (inner_iteration < inner_max_iters) && (norm_next > tol)
-                cycle_coord!(active, β_next, β_prev, X, res, l_sum, l_squares, r_shift, μ, invσ, lasso_penalty, ridge_penalty)
+                cycle_coord!(active, β_next, β_prev, X, res, l_sum, l_squares, r_shift, nz_count, μ, invσ, lasso_penalty, ridge_penalty)
 
                 # Track convergence
                 norm_next = conv_crit(β_prev, β_next, σ2)
@@ -174,7 +177,7 @@ function coord_descent(X::BasisMatrixBlocks, y::Vector{Float64}, μ::Vector{Floa
             #inner_total_tracker += inner_iteration
 
             # One more cycle over all variables to assess if active set changes
-            cycle_coord!(trues(d), β_next, β_prev, X, res, l_sum, l_squares, r_shift, μ, invσ, lasso_penalty, ridge_penalty)
+            cycle_coord!(trues(d), β_next, β_prev, X, res, l_sum, l_squares, r_shift, nz_count, μ, invσ, lasso_penalty, ridge_penalty)
             next_active .= β_next .!= 0
             
             # If the active set has not changed, then we're done. Otherwise, keep going

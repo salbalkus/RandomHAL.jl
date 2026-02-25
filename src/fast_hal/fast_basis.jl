@@ -438,5 +438,11 @@ function left_squares(B::BasisMatrixBlocksTranspose)
     reduce(vcat, [left_squares(block) for block in B.blocks])
 end
 
+nonzero_count(B::BasisMatrixTranspose) = mul(B.F, ones(B.ncol))
+
+function nonzero_count(B::BasisMatrixBlocksTranspose)
+    reduce(vcat, [nonzero_count(block) for block in B.blocks])
+end
+
 
 
