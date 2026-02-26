@@ -5,6 +5,7 @@ module RandomHAL
     import Base: *, getindex, size, transpose
 
     using StatsBase
+    using DataAPI
     using Tables
     using Distributions
     using GLMNet
@@ -44,7 +45,7 @@ module RandomHAL
     include("fast_hal/fast_basis.jl")
     export NestedIndicators, NestedIndicatorBlocks, NestedMatrix, NestedMatrixBlocks 
     export Basis, BasisBlocks, BasisMatrix, BasisMatrixBlocks
-    export transpose, colmeans, squares, left_sum, left_squares, nonzero_count, *, mul, mul!
+    export transpose, colmeans, squares, left_sum, left_squares, nonzero_count, *, mul, mul!, mul2
 
     include("fast_hal/fast_coord_descent.jl")
     export coord_descent

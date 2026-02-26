@@ -311,7 +311,7 @@ function Base.:*(B::BasisMatrix, V::AbstractMatrix)
     reduce(hcat, mul(B, v) for v in eachcol(V))
 end
 
-Base.getindex(B::BasisMatrix, inds...) = BasisMatrix(getindex(B.F, inds...), B.l[inds...], B.r[inds...])
+Base.getindex(B::BasisMatrix, inds...) = BasisMatrix(getindex(B.F, inds...), B.l[inds...], B.r, B.smoothness, B.ncol, length(inds...))
 
 ### Transpose of Indicator Basis Matrix ###
 struct BasisMatrixTranspose <: AbstractNestedMatrix
@@ -335,7 +335,7 @@ function Base.:*(B::BasisMatrixTranspose, V::AbstractMatrix)
     reduce(hcat, mul(B, v) for v in eachcol(V))
 end
 
-Base.getindex(B::BasisMatrixTranspose, inds...) = BasisMatrix(getindex(B.F, inds...), B.l[inds...], B.r[inds...], B.smoothness)
+Base.getindex(B::BasisMatrixTranspose, inds...) = BasisMatrix(getindex(B.F, inds...), B.l[inds...], B.r, B.smoothness, length(inds...), B.nrow)
 # Transpose methods #
 transpose(B::BasisMatrix) = BasisMatrixTranspose(transpose(B.F), B.l, B.r, B.smoothness, B.nrow, B.ncol)
 transpose(B::BasisMatrixTranspose) = BasisMatrix(transpose(B.F), B.l, B.r, B.smoothness, B.nrow, B.ncol)

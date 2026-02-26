@@ -4,13 +4,15 @@ split_folds(v, n, K) = [v[collect(i:K:n)] for i in 1:K]
 
 # Define a data structure to store the fitted HAL components
 mutable struct RandomHALParameters
-    indblocks::NestedIndicatorBlocks
+    indblocks::BasisBlocks
     β::AbstractVector{Float64}
     β0::Float64
     best_λ::Float64
 end
 
-function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}, X::AbstractMatrix, y::AbstractVector{Float64}; K::Int64 = 5, outer_max_iters::Int64 = 1000, inner_max_iters::Int64 = 1000, λ = nothing, λ_grid_length::Int64 = 100, min_λ_ε::Float64 = 1e-3, tol::Float64 = 1e-7, α::Float64 = 1.0)
+function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}, X::AbstractMatrix, y::AbstractVector{Float64}; 
+    smoothness::Int64 = 0, K::Int64 = 5, outer_max_iters::Int64 = 1000, inner_max_iters::Int64 = 1000, 
+    λ = nothing, λ_grid_length::Int64 = 100, min_λ_ε::Float64 = 1e-3, tol::Float64 = 1e-7, α::Float64 = 1.0)
 
     # Preprocess outcome variable
     σ_y = sqrt(var(y, corrected=false))
@@ -19,10 +21,10 @@ function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}
     n = length(y_cs)
 
     # Construct the indicators to produce a basis
-    indblocks = NestedIndicatorBlocks(sections, X)
+    indblocks = BasisBlocks(sections, X, smoothness)
 
     # Construct the basis and variance estimates for the training data
-    B = NestedMatrixBlocks(indblocks, X)
+    B = BasisMatrixBlocks(indblocks, X)
     d = B.ncol
 
     # If λ is unspecified, automatically construct a grid.
@@ -38,10 +40,9 @@ function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}
     end
 
     # Fit the initial set of coefficients over the entire dataset
-    μ = (transpose(B) * ones(B.nrow)) ./ B.nrow
+    μ = colmeans(B)
     σ2 = (squares(transpose(B)) ./ B.nrow) .- (μ.^2)
     β = coord_descent(B, y_cs, μ, σ2, λ_range; outer_max_iters = outer_max_iters, inner_max_iters = inner_max_iters, tol = tol, α = α)
-
 
     # Split the data into K folds
     folds = split_folds(sample(1:n, n), n, K)
@@ -84,6 +85,6 @@ function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}
 end
 
 function predict_randomhal(model::RandomHALParameters, X::AbstractMatrix)
-    B = NestedMatrixBlocks(model.indblocks, X)
+    B = BasisMatrixBlocks(model.indblocks, X)
     return (B * model.β) .+ model.β0
 end

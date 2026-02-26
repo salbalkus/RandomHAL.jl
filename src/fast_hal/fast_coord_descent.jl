@@ -14,46 +14,27 @@ function update_coefficients!(indices, active::BitVector, β, β_unp, β_prev, l
     Δ = 0
     Δ_intercept_part = 0
     Δ_scaled_part = 0
-    Δ_μ1 = 0
-    Δ_μ2 = 0
+    #Δ_μ1 = 0
+    #Δ_μ2 = 0
     Δ_μ3 = 0
-    k_max = indices[end]
 
     # Sequentially update residuals within the union of the current block and the active set and soft-threshold
     for k in indices
         if active[k]
 
-            i = k - cur_ind + 1
-            # ΔA appears correct, I think ΔB is incorrect
             ΔA = (Δ_intercept_part + (r_shift[k] * Δ_scaled_part)) 
-            ΔB = Δ_μ1*(l_sum[k] - nz_count[k]*r_shift[k]) - Δ_μ2*μ[k] + Δ_μ3*μ[k]
-            Δ = (invσ[k]*ΔA) - (invσ[k]*ΔB)
+            ΔB = Δ_μ3*μ[k]# - Δ_μ2*μ[k] + Δ_μ1*(l_sum[k] - nz_count[k]*r_shift[k])
+            Δ = invσ[k]*(ΔA - ΔB)
 
             # Apply the lasso thresholding
-            β[k] = soft_threshold(β_unp[i] - Δ, lasso_penalty) / ridge_penalty
- 
+            β[k] = soft_threshold(β_unp[k - cur_ind + 1] - Δ, lasso_penalty) / ridge_penalty
 
-            #if k < k_max
-            #    Δβ = β[k] - β_prev[k]  
-                
-            #    Δ -= invσ[k+1] * invσ[k] * Δβ * (l_squares[k] - (r_shift[k]*l_sum[k]) - (r_shift[k+1]*l_sum[k]) + (i*(r_shift[k+1]*r_shift[k]))) / n
-
-                # These have been checked against truth. We are correctly centering
-            #    Δ_μ1 = μ[k]*(l_sum[k+1] - (i+1)*r_shift[k+1]) # unscaled update of XT * 1μT * β
-            #    Δ_μ2 = μ[k+1]*(l_sum[k] - i*r_shift[k]) # unscaled update of μ1T * X * β
-            #    Δ_μ3 = n*μ[k]*μ[k+1] # unscaled update of μ1T * 1μT * β; weird thing is that Δ_μ1 = Δμ2 = Δ_μ3 in testing
-            #    Δ += Δβ * invσ[k+1]*invσ[k]*(Δ_μ1 - Δ_μ2 + Δ_μ3) / n
-            #end
-
-            # The current error is that this doesn't work for interaction terms (overestimates)
             invσΔβ            =  invσ[k] * (β[k] - β_prev[k]) / n
             Δ_intercept_part +=  invσΔβ * (l_squares[k] - r_shift[k]*l_sum[k])
             Δ_scaled_part    +=  invσΔβ * (nz_count[k]*r_shift[k] - l_sum[k])
 
-            Δ_μ1 += invσΔβ * μ[k]
-            Δ_μ2 += invσΔβ * (l_sum[k] - nz_count[k]*r_shift[k])
-
-            # Does this n need to be adjusted?
+            #Δ_μ1 += invσΔβ * μ[k]
+            #Δ_μ2 += invσΔβ * (l_sum[k] - nz_count[k]*r_shift[k])
             Δ_μ3 += invσΔβ * n * μ[k]
 
         end

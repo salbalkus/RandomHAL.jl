@@ -14,7 +14,7 @@
 end
 
 function MLJBase.fit(model::RandomHALRegressor, verbosity, X, y)
-    sections = collect(combinations([2,3,4]))[2:end]
+    sections = collect(combinations(1:DataAPI.ncol(X)))[2:end]
     Xm = Tables.matrix(X)
 
     params = fast_fit_cv_randomhal(sections, Xm, y; 
