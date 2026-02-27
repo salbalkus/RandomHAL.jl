@@ -45,10 +45,14 @@ module RandomHAL
     include("fast_hal/fast_basis.jl")
     export NestedIndicators, NestedIndicatorBlocks, NestedMatrix, NestedMatrixBlocks 
     export Basis, BasisBlocks, BasisMatrix, BasisMatrixBlocks
-    export transpose, colmeans, squares, left_sum, left_squares, nonzero_count, *, mul, mul!, mul2
+    export transpose, colmeans, squares, left_sum, left_squares, nonzero_count, nonzero_sum, wls_reweight
+    export mul, mul!, *
 
     include("fast_hal/fast_coord_descent.jl")
     export coord_descent
+
+    include("fast_hal/fast_coord_descent_binom.jl")
+    export coord_descent_binom
 
     include("fast_hal/fast_fit_randomhal.jl")
     export fast_fit_cv_randomhal, predict_randomhal

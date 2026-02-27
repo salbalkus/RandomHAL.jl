@@ -36,6 +36,10 @@ X = Tables.Columns(responseparents(ct))
 Xm = Tables.matrix(X)
 y = vec(responsematrix(ct))
 
+Xa = Tables.Columns(treatmentparents(ct))
+Xma = Tables.matrix(Xa)
+A = vec(treatmentmatrix(ct))
+
 # Test NestedMatrix functionality
 @testset "NestedMatrix" begin
     all_ranks = reduce(hcat, map(competerank, eachcol(Xm)))
@@ -216,4 +220,39 @@ end
     preds = MLJBase.predict(mach, X)
     mse = mean((y .- preds).^2)
     @test mse < 0.01
+end
+
+#@testset "Logistic Regression" begin
+    smoothness = 1
+    S = collect(combinations([1,2,3]))[2:end]
+    indb = BasisBlocks(S, Xm, smoothness)
+    B = BasisMatrixBlocks(indb, Xm)
+    μ = colmeans(B)
+    σ2 = (squares(transpose(B)) ./ B.nrow) .- (μ.^2)
+    invσ = 1 ./ sqrt.(σ2)
+    invσ[isinf.(invσ)] .= 0.0 
+
+    B2 = (B * Matrix(I, B.ncol, B.ncol))
+
+
+    # Test the weighted variance and mean for WLS
+    w = rand(n)
+    true_w_mean =  vec(sum(B2 .* w, dims=1))
+    @test true_w_mean ≈ colmeans(B, w)
+
+    true_w_squares = vec(sum(w .* (B2.^2), dims=1))
+    w_squares = squares(transpose(B), w)
+    @test true_w_squares ≈ w_squares
+    
+    true_reweighting = vec(sum(w .* ((B2 .- transpose(μ)) .* transpose(invσ)).^2, dims=1))
+    @time reweighting = wls_reweight(transpose(B), w, sum(w), μ, μ.^2, invσ.^2)
+    @test true_reweighting ≈ reweighting
+
+    λ_range = [0.1, 0.01, 0.001, 0.0001]
+    @time path = coord_descent_binom(B, A, μ, σ2, λ_range; outer_max_iters = 1000, inner_max_iters = 1000, tol = 10e-8)
+
+    
+
+
+
 end

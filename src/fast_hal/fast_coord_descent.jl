@@ -3,7 +3,6 @@
 
 soft_threshold(z::Float64, λ::Float64) = sign(z) * max(0, abs(z) - λ)
 conv_crit(β_prev::Vector{Float64}, β_next::Vector{Float64}, σ2::Vector{Float64}) = maximum(σ2 .* (β_next .- β_prev).^2)
-pct_change(next_loss::Float64, prev_loss::Float64) = abs(next_loss - prev_loss) / prev_loss
 
 # This function currently produces a lot of allocations. 
 # May be able to reduce these with clever programming tricks
@@ -14,14 +13,16 @@ function update_coefficients!(indices, active::BitVector, β, β_unp, β_prev, l
     Δ = 0
     Δ_intercept_part = 0
     Δ_scaled_part = 0
-    #Δ_μ1 = 0
-    #Δ_μ2 = 0
+    #Δ_μ1 = 0 # Δ_μ1 and Δ_μ2 cancel each other out; keeping them
+    #Δ_μ2 = 0 #  here to understand what the update is mathematically
     Δ_μ3 = 0
 
     # Sequentially update residuals within the union of the current block and the active set and soft-threshold
     for k in indices
         if active[k]
 
+            # Compute components needed to update the next β_unp
+            # that do not get cumulatively summed
             ΔA = (Δ_intercept_part + (r_shift[k] * Δ_scaled_part)) 
             ΔB = Δ_μ3*μ[k]# - Δ_μ2*μ[k] + Δ_μ1*(l_sum[k] - nz_count[k]*r_shift[k])
             Δ = invσ[k]*(ΔA - ΔB)
@@ -29,10 +30,11 @@ function update_coefficients!(indices, active::BitVector, β, β_unp, β_prev, l
             # Apply the lasso thresholding
             β[k] = soft_threshold(β_unp[k - cur_ind + 1] - Δ, lasso_penalty) / ridge_penalty
 
+            # Compute components needed to update the next β_unp
+            # that involve the kth entries of vectors
             invσΔβ            =  invσ[k] * (β[k] - β_prev[k]) / n
             Δ_intercept_part +=  invσΔβ * (l_squares[k] - r_shift[k]*l_sum[k])
             Δ_scaled_part    +=  invσΔβ * (nz_count[k]*r_shift[k] - l_sum[k])
-
             #Δ_μ1 += invσΔβ * μ[k]
             #Δ_μ2 += invσΔβ * (l_sum[k] - nz_count[k]*r_shift[k])
             Δ_μ3 += invσΔβ * n * μ[k]
@@ -46,12 +48,7 @@ function cycle_coord!(active::BitVector, β, β_prev, X::BasisMatrixBlocks, res,
                       lasso_penalty::Float64, ridge_penalty::Float64)
 
     cur_ind  = 1
-    #r = (y .- X * (β .* invσ)) .+ sum(μ .* β .* invσ)
     for XB in X.blocks
-        # Compute residuals for entire basis.
-        # Fast nesting structure requires we sum over all of the coefficients anyways,
-        # so we don't skip inactive set for the high-level residual computation.
-        # (could technically exclude inactive tails, but this introduces its own nontrivial overhead) 
 
         # Get the coefficient indices for the current block
         indices = cur_ind:(cur_ind + XB.ncol - 1)
@@ -59,10 +56,10 @@ function cycle_coord!(active::BitVector, β, β_prev, X::BasisMatrixBlocks, res,
         # Compute unpenalized coefficient update for entire block
         β_unp = view(β, indices) .+ ((((transpose(XB) * res)  .- (view(μ, indices).*sum(res))) .* view(invσ, indices))./ XB.nrow)
 
-        # The line below doesn't work for smoothness 2 or higher
+        # Update coefficients sequentially
         update_coefficients!(indices, active, β, β_unp, β_prev, l_sum, l_squares, r_shift, nz_count, μ, invσ, lasso_penalty, ridge_penalty, cur_ind, X.nrow)
 
-        # Update residuals in-place
+        # Update residuals in-place to avoid excessive allocations
         dif = (view(β, indices)  - view(β_prev, indices)) .* view(invσ, indices)
         res .-= XB * dif
         res .+= sum(view(μ, indices) .* dif)
@@ -91,46 +88,30 @@ function coord_descent(X::BasisMatrixBlocks, y::Vector{Float64}, μ::Vector{Floa
 
     # Set up storage for coefficients
     β = Matrix{Float64}(undef, d, length(λ_range))
-    
-    #warm_path = false
-    #if typeof(warm_β) <: Matrix
-    #    warm_path = true
-    #    β_prev = Vector{Float64}(undef, d)
-    #elseif isnothing(warm_β)
-    #    β_prev = zeros(d)
-    #else
-    #    β_prev = warm_β
-    #end
     β_prev = zeros(d)
     β_next = copy(β_prev)
     res = copy(y)
-
-    # Change behavior if we've provided an entire path of warm starts
-    #outer_total_tracker = 0
-    #inner_total_tracker = 0
 
     for (λ_index, λ) in enumerate(λ_range)
         # Compute penalties
         lasso_penalty = λ*α
         ridge_penalty = 1 - (1 - α)*λ
 
-        # Before we begin, update β vectors with pre-existing guesses if using a warm path
-        #if warm_path
-        #    β_prev = warm_β[:, λ_index]
-        #    β_next .= β_prev
-        #end
-
         # First, cycle through all variables to determine the active set
         # Then, iterate on the active set until convergence
         # Finally, repeat on the entire set of variables. If nothing changes, done!
         # Otherwise, update the active set and repeat 
 
+        # Below is some code to implement screening used by GLMNet
+        # Commented out to disable it for testing 
         # The active set is defined initially by the sequential strong rule (Tibshirani et al. 2010)
         #if λ_index == 1
         #    active = abs.(transpose(X) * y) .< λ
         #else
         #    active = abs.(transpose(X) * (y - X * β[:,λ_index-1])) .< ((2*λ) - λ_range[λ_index - 1])
         #end
+
+        # Initialize active set and iteration counter
         active = trues(d)
         next_active = copy(active)
         outer_iteration = 1
@@ -138,6 +119,7 @@ function coord_descent(X::BasisMatrixBlocks, y::Vector{Float64}, μ::Vector{Floa
         # Run an initial update
         cycle_coord!(trues(d), β_next, β_prev, X, res, l_sum, l_squares, r_shift, nz_count, μ, invσ, lasso_penalty, ridge_penalty)
         β_prev .= β_next
+
         # Begin iterative descent
         while (outer_iteration < outer_max_iters)
             # Update the active set and norm for next sub-cycle
@@ -150,34 +132,27 @@ function coord_descent(X::BasisMatrixBlocks, y::Vector{Float64}, μ::Vector{Floa
 
                 # Track convergence
                 norm_next = conv_crit(β_prev, β_next, σ2)
-                #println("Norm next: ", norm_next)
-
                 β_prev .= β_next
                 inner_iteration += 1
             end
-            #inner_total_tracker += inner_iteration
 
             # One more cycle over all variables to assess if active set changes
             cycle_coord!(trues(d), β_next, β_prev, X, res, l_sum, l_squares, r_shift, nz_count, μ, invσ, lasso_penalty, ridge_penalty)
             next_active .= β_next .!= 0
             
             # If the active set has not changed, then we're done. Otherwise, keep going
-            #println("Active set size: ", sum(next_active))
             active == next_active && break
             active .= next_active
             β_prev .= β_next
 
             outer_iteration += 1
         end
-        #println("Outer: ", outer_iteration)
-        #outer_total_tracker += outer_iteration
+
+        # Store final output
         β[:, λ_index] = β_next
     end
-    #println("Outer: ", outer_total_tracker, " Inner: ", inner_total_tracker)
-
     return β
 end
-
 
 
 

@@ -413,36 +413,62 @@ getindex(B::BasisMatrixBlocksTranspose, inds...) = BasisMatrixBlocksTranspose([b
 
 ### Extra Utility Functions
 
-function colmeans(B::BasisMatrixBlocks)
-    mul(transpose(B), ones(B.nrow)) ./ B.nrow
+function colmeans(B::BasisMatrixBlocks, w::AbstractVector{Float64})
+    mul(transpose(B), w)
 end
 
-function squares(B::BasisMatrixTranspose)
-    v = ones(B.ncol)
-    return (mul(B.F, B.l.^2) .+ (B.r.^2 .* mul(B.F, v)) .- 2 .* B.r .* mul(B.F, B.l))
+colmeans(B::BasisMatrixBlocks) = colmeans(B, ones(B.nrow) ./ B.nrow)
+
+function squares(B::BasisMatrixTranspose, w::AbstractVector{Float64})
+    return (mul(B.F, w .* B.l.^2) .+ (B.r.^2 .* mul(B.F, w)) .- 2 .* B.r .* mul(B.F, w .* B.l))
 end
 
-function squares(B::BasisMatrixBlocksTranspose)
-    reduce(vcat, [squares(block) for block in B.blocks])
+squares(B::BasisMatrixTranspose) = squares(B, ones(B.ncol))
+
+function squares(B::BasisMatrixBlocksTranspose, w::AbstractVector{Float64})
+    reduce(vcat, [squares(block, w) for block in B.blocks])
 end
+
+squares(B::BasisMatrixBlocksTranspose) = reduce(vcat, [squares(block) for block in B.blocks])
 
 left_sum(B::BasisMatrixTranspose) = mul(B.F, B.l)
+left_sum(B::BasisMatrixTranspose, w::AbstractVector{Float64}) = mul(B.F, w .* B.l)
 
 function left_sum(B::BasisMatrixBlocksTranspose)
     reduce(vcat, [left_sum(block) for block in B.blocks])
 end
 
+function left_sum(B::BasisMatrixBlocksTranspose, w::AbstractVector{Float64})
+    reduce(vcat, [left_sum(block, w) for block in B.blocks])
+end
+
 left_squares(B::BasisMatrixTranspose) = mul(B.F, B.l.^2)
+left_squares(B::BasisMatrixTranspose, w::AbstractVector{Float64}) = mul(B.F, w .* B.l.^2)
+
 
 function left_squares(B::BasisMatrixBlocksTranspose)
     reduce(vcat, [left_squares(block) for block in B.blocks])
 end
 
+function left_squares(B::BasisMatrixBlocksTranspose, w::AbstractVector{Float64})
+    reduce(vcat, [left_squares(block, w) for block in B.blocks])
+end
+
 nonzero_count(B::BasisMatrixTranspose) = mul(B.F, ones(B.ncol))
+nonzero_sum(B::BasisMatrixTranspose, w::AbstractVector{Float64}) = mul(B.F, w)
+
 
 function nonzero_count(B::BasisMatrixBlocksTranspose)
     reduce(vcat, [nonzero_count(block) for block in B.blocks])
 end
+
+function nonzero_sum(B::BasisMatrixBlocksTranspose, w::AbstractVector{Float64})
+    reduce(vcat, [nonzero_sum(block, w) for block in B.blocks])
+end
+
+
+wls_reweight(B::BasisMatrixBlocksTranspose, w, w_sum, μ, μ2, invσ2) = (squares(B, w) .+ (μ2 .* w_sum) .- (2 .* μ .* (B * w))) .* invσ2
+
 
 
 
