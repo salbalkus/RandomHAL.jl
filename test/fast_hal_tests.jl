@@ -25,6 +25,7 @@ dgp = @dgp(
         #X8 ~ Normal.(1 .- cos.(2*pi*X2), 0.0001),
         #X9 ~ Normal.((X3 .- 0.5) .* ((X3 .> 0.5) - (X3 .< 0.5)), 0.0),
 
+        #A ~ (@. Bernoulli(logistic(6 * X2 - 3))),
         A ~ (@. Bernoulli(logistic((X2 + X2^2 + X3 + X3^2 + X4 + X4^2 + X2 * X3) - 2.5))),
         #Y ~ (@. Normal(A + X2 * X3 + A * X2 + A * X4 + 0.2 * (sqrt(10*X3*X4) + sqrt(10 * X2) + sqrt(10 * X3) + sqrt(10*X4)), 0.01))
         Y ~ (@. Normal(sin.(2*pi * X2) + sin(2*pi*X3) + sin(2*pi*X4), 0.1))
@@ -39,6 +40,7 @@ y = vec(responsematrix(ct))
 Xa = Tables.Columns(treatmentparents(ct))
 Xma = Tables.matrix(Xa)
 A = vec(treatmentmatrix(ct))
+true_pr = propensity(scm, ct, :A)
 
 # Test NestedMatrix functionality
 @testset "NestedMatrix" begin
@@ -225,10 +227,12 @@ end
 #@testset "Logistic Regression" begin
     smoothness = 1
     S = collect(combinations([1,2,3]))[2:end]
+    #S = [[1]]
     indb = BasisBlocks(S, Xm, smoothness)
     B = BasisMatrixBlocks(indb, Xm)
     μ = colmeans(B)
     σ2 = (squares(transpose(B)) ./ B.nrow) .- (μ.^2)
+    σ2[σ2 .< 0.0] .= 0.0
     invσ = 1 ./ sqrt.(σ2)
     invσ[isinf.(invσ)] .= 0.0 
 
@@ -236,23 +240,39 @@ end
 
 
     # Test the weighted variance and mean for WLS
-    w = rand(n)
+    w = rand(B.nrow)
     true_w_mean =  vec(sum(B2 .* w, dims=1))
     @test true_w_mean ≈ colmeans(B, w)
 
     true_w_squares = vec(sum(w .* (B2.^2), dims=1))
     w_squares = squares(transpose(B), w)
     @test true_w_squares ≈ w_squares
-    
+
+
     true_reweighting = vec(sum(w .* ((B2 .- transpose(μ)) .* transpose(invσ)).^2, dims=1))
     @time reweighting = wls_reweight(transpose(B), w, sum(w), μ, μ.^2, invσ.^2)
     @test true_reweighting ≈ reweighting
 
-    λ_range = [0.1, 0.01, 0.001, 0.0001]
-    @time path = coord_descent_binom(B, A, μ, σ2, λ_range; outer_max_iters = 1000, inner_max_iters = 1000, tol = 10e-8)
+    λ_range = [0.1, 0.05, 0.01]
+    # We get almost exactly the same results using w = 0.25 bound for 0 smoothness
+    # But differences occur with 1 smoothness
+    # And still divergence issues with the true weights -- why??
+    @time path, β0 = coord_descent_binom(B, A, μ, σ2, λ_range; tol = 10e-6)
 
-    
+    path_scaled = path .* invσ
+    lin_preds = B * path_scaled .- (reshape(μ, 1, B.ncol) * path_scaled) .+ β0'
+    preds = 1 ./ (1 .+ exp.(-lin_preds))
+    mse = [mean((preds[:, i] .- A).^2) for i in 1:size(path, 2)]
 
+    # How close are we to GLMNet?
+    @time glmnet_fit = glmnet(B2, float.([.!(A) A]), Binomial(), lambda = λ_range)
+    glmnet_preds = GLMNet.predict(glmnet_fit, B2, outtype = :prob)
+    glmnet_mse = [mean((GLMNet.predict(glmnet_fit, B2, outtype = :prob)[:, i] .- A).^2) for i in 1:length(glmnet_fit.lambda)]
+
+    scatter(Xm[:, 1], A)
+    scatter!(Xm[:, 1], A .* true_pr .+ (1 .- A) .* (1 .- true_pr))
+    scatter!(Xm[:, 1], preds[:, 1])
+    scatter!(Xm[:, 1], glmnet_preds[:, 1])
 
 
 end

@@ -139,11 +139,11 @@ function coord_descent(X::BasisMatrixBlocks, y::Vector{Float64}, μ::Vector{Floa
             # One more cycle over all variables to assess if active set changes
             cycle_coord!(trues(d), β_next, β_prev, X, res, l_sum, l_squares, r_shift, nz_count, μ, invσ, lasso_penalty, ridge_penalty)
             next_active .= β_next .!= 0
-            
+            β_prev .= β_next
+
             # If the active set has not changed, then we're done. Otherwise, keep going
             active == next_active && break
             active .= next_active
-            β_prev .= β_next
 
             outer_iteration += 1
         end

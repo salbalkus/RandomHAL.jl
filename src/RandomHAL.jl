@@ -12,6 +12,7 @@ module RandomHAL
     using MLJBase
     using InvertedIndices
     using LinearAlgebra
+    using LogExpFunctions
     using MLJModelInterface
     const MMI = MLJModelInterface
 
