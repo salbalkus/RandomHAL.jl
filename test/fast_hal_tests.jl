@@ -254,8 +254,8 @@ end
     @test vec(sum(B2 .* 0.25, dims=1)) ≈ colmeans(B) .* (n * 0.25)
     @test vec(sum(0.25 .* (B2.^2), dims=1)) ≈ squares(transpose(B)) .* 0.25
 
-    λ_range = [0.5, 0.1, 0.05]
-    @time path, β0 = coord_descent_binom(B, A, μ, σ2, λ_range; tol = 10e-6, outer_max_iters = 100, inner_max_iters = 100, newton_max_iters = 100)
+    λ_range = [0.5, 0.1, 0.05, 0.01, 0.001]
+    @time path, β0 = coord_descent_binom(B, A, μ, σ2, λ_range; tol = 10e-6)
 
     path_scaled = path .* invσ
     lin_preds = B * path_scaled .- (reshape(μ, 1, B.ncol) * path_scaled) .+ β0'
@@ -267,9 +267,10 @@ end
     glmnet_preds = GLMNet.predict(glmnet_fit, B2, outtype = :prob)
     glmnet_mse = [mean((GLMNet.predict(glmnet_fit, B2, outtype = :prob)[:, i] .- A).^2) for i in 1:length(glmnet_fit.lambda)]
 
+    i = 4
     scatter(Xm[:, 1], A)
     scatter!(Xm[:, 1], A .* true_pr .+ (1 .- A) .* (1 .- true_pr))
-    scatter!(Xm[:, 1], preds[:, 2])
-    scatter!(Xm[:, 1], glmnet_preds[:, 2])
+    scatter!(Xm[:, 1], preds[:, i])
+    scatter!(Xm[:, 1], glmnet_preds[:, i])
 
 end

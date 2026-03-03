@@ -40,14 +40,12 @@ function update_coefficients_binom!(indices, active::BitVector, β, β_unp, β_p
 end
 
 function cycle_coord_binom!(active::BitVector, β, β_prev, X::BasisMatrixBlocks, 
-                      hessian_bound, z, β0, β0_prev,
+                      hessian_bound, z, lin_preds,
                       l_sum, l_squares, r_shift, nz_sum, μ, invσ,
                       lasso_penalty::Float64)    
 
     # Iterate through each block of the basis
     cur_ind  = 1
-    β_scaled = (β_prev .* invσ)
-    lin_preds = (X * β_scaled) .- sum(μ .* β_scaled) .+ β0
     res = z .- lin_preds
     for XB in X.blocks
 
@@ -62,7 +60,8 @@ function cycle_coord_binom!(active::BitVector, β, β_prev, X::BasisMatrixBlocks
 
         # Update residuals in-place to avoid excessive allocations
         dif = (view(β, indices)  - view(β_prev, indices)) .* view(invσ, indices)
-        res .-= ((XB * dif) .- sum(view(μ, indices) .* dif))
+        lin_preds .+= ((XB * dif) .- sum(view(μ, indices) .* dif))
+        res .= z .- lin_preds
 
         # Update indices to the next block
         cur_ind += XB.ncol
@@ -86,6 +85,7 @@ function coord_descent_binom(X::BasisMatrixBlocks, y::Vector, μ::Vector{Float64
     pr = fill(0.5, n)
     hessian_bound = 0.25
     z = ((y .- pr) ./ hessian_bound) 
+    lin_preds = zeros(n)
 
     # Precompute some quantities for cycling
     l_sum = hessian_bound .* left_sum(transpose(X))
@@ -123,8 +123,9 @@ function coord_descent_binom(X::BasisMatrixBlocks, y::Vector, μ::Vector{Float64
             # Run an initial update
             # Note the reason we update the intercept separately is because it is a Float not passed by reference,
             # so we need to update β0_prev outside of a function call
-            β0_next = mean(z .- (X * (β_next .* invσ)) .+ sum(μ .* (β_prev .* invσ)))
-            cycle_coord_binom!(trues(d), β_next, β_prev, X, hessian_bound, z, β0_next, β0_prev, l_sum, l_squares, r_shift, nz_sum, μ, invσ, lasso_penalty)
+            β0_next = mean(z .- lin_preds .+ β0_next)
+            lin_preds .+= β0_next .- β0_prev
+            cycle_coord_binom!(trues(d), β_next, β_prev, X, hessian_bound, z, lin_preds, l_sum, l_squares, r_shift, nz_sum, μ, invσ, lasso_penalty)
             β_prev .= β_next
             β0_prev = β0_next
 
@@ -138,8 +139,9 @@ function coord_descent_binom(X::BasisMatrixBlocks, y::Vector, μ::Vector{Float64
                 # Update active set until convergence
                 inner_iteration = 1
                 while (inner_iteration < inner_max_iters) && (norm_next > tol)
-                    β0_next = mean(z .- (X * (β_prev .* invσ)) .+ sum(μ .* (β_prev .* invσ)))
-                    cycle_coord_binom!(active, β_next, β_prev, X, hessian_bound, z, β0_next, β0_prev, l_sum, l_squares, r_shift, nz_sum, μ, invσ, lasso_penalty)
+                    β0_next = mean(z .- lin_preds .+ β0_next)
+                    lin_preds .+= β0_next .- β0_prev
+                    cycle_coord_binom!(active, β_next, β_prev, X, hessian_bound, z, lin_preds, l_sum, l_squares, r_shift, nz_sum, μ, invσ, lasso_penalty)
 
                     # Track convergence
                     norm_next = conv_crit(β_prev, β_next, σ2)
@@ -149,8 +151,9 @@ function coord_descent_binom(X::BasisMatrixBlocks, y::Vector, μ::Vector{Float64
                 end
 
                 # One more cycle over all variables to assess if active set changes
-                β0_next = mean(z .- (X * (β_prev .* invσ)) .+ sum(μ .* (β_prev .* invσ)))
-                cycle_coord_binom!(trues(d), β_next, β_prev, X, hessian_bound, z, β0_next, β0_prev, l_sum, l_squares, r_shift, nz_sum, μ, invσ, lasso_penalty)
+                β0_next = mean(z .- lin_preds .+ β0_next)
+                lin_preds .+= β0_next .- β0_prev
+                cycle_coord_binom!(trues(d), β_next, β_prev, X, hessian_bound, z, lin_preds, l_sum, l_squares, r_shift, nz_sum, μ, invσ, lasso_penalty)
                 next_active .= β_next .!= 0
                 β_prev .= β_next
                 β0_prev = β0_next
