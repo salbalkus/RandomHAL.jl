@@ -55,7 +55,7 @@ function fast_fit_cv_randomhal_binom(sections::AbstractVector{<:AbstractVector{I
 
         # Evaluate mean-squared error on validation set
         Bv = B[val]
-        predv = 1 ./ (1 .+ exp.(-((Bv * βt) .+ β0t)))
+        predv = expit.((Bv * βt) .+ β0t)
 
         yv = y[val]
         dev[k] = -mean(yv .* log.(predv) .+ (1 .- yv) .* log.(1 .- predv), dims=1)
@@ -75,5 +75,5 @@ end
 
 function predict_randomhal_binom(model::RandomHALParameters, X::AbstractMatrix)
     B = BasisMatrixBlocks(model.indblocks, X)
-    return 1 ./ (1 .+ exp.(-((B * model.β) .+ model.β0)))
+    return expit.((B * model.β) .+ model.β0)
 end

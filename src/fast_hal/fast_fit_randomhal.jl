@@ -1,4 +1,3 @@
-split_folds(v, n, K) = [v[collect(i:K:n)] for i in 1:K]
 
 # Define a data structure to store the fitted HAL components
 mutable struct RandomHALParameters

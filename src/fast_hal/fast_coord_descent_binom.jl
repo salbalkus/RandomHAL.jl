@@ -164,7 +164,7 @@ function coord_descent_binom(X::BasisMatrixBlocks, y::Vector, μ::Vector{Float64
             # Otherwise, update the IRLS weights
             β_scaled = (β_next .* invσ)
             lin_preds = (X * β_scaled) .- sum(μ .* β_scaled) .+ β0_next
-            pr .= 1 ./ (1 .+ exp.(-(lin_preds)))
+            pr .= expit.(lin_preds)
 
             # Deal with possible divergence issues
             lower_diverging_pr = pr .< 10e-5

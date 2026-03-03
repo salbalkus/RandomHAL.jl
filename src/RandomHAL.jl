@@ -16,6 +16,8 @@ module RandomHAL
     using MLJModelInterface
     const MMI = MLJModelInterface
 
+    include("utility.jl")
+    export expit, split_folds
 
     ############################################
     ### Code to implement classical HAL and  ###
@@ -62,9 +64,10 @@ module RandomHAL
     export fast_fit_cv_randomhal_binom, predict_randomhal_binom
 
     include("fast_hal/fast_hal_mlj_interface.jl")
-    export RandomHALRegressor, fit, predict
+    export RandomHALRegressor
 
     include("fast_hal/fast_hal_binom_mlj_interface.jl")
-    export RandomHALClassifier, fit, predict
+    export RandomHALClassifier
+    export fit, predict
 
 end
