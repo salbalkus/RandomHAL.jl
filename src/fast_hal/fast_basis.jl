@@ -466,7 +466,6 @@ function nonzero_sum(B::BasisMatrixBlocksTranspose, w::AbstractVector{Float64})
     reduce(vcat, [nonzero_sum(block, w) for block in B.blocks])
 end
 
-
 wls_reweight(B::BasisMatrixBlocksTranspose, w, w_sum, μ, μ2, invσ2) = (squares(B, w) .+ (μ2 .* w_sum) .- (2 .* μ .* (B * w))) .* invσ2
 
 

@@ -1,28 +1,13 @@
-split_folds(v, n, K) = [v[collect(i:K:n)] for i in 1:K]
-
-# Define a data structure to store the fitted HAL components
-mutable struct RandomHALParameters
-    indblocks::BasisBlocks
-    β::AbstractVector{Float64}
-    β0::Float64
-    best_λ::Float64
-end
-
-function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}, X::AbstractMatrix, y::AbstractVector{Float64}; 
+function fast_fit_cv_randomhal_binom(sections::AbstractVector{<:AbstractVector{Int64}}, X::AbstractMatrix, y::AbstractVector{Float64}; 
     smoothness::Int64 = 0, K::Int64 = 10, outer_max_iters::Int64 = 1000, inner_max_iters::Int64 = 1000, 
     λ = nothing, λ_grid_length::Int64 = 100, min_λ_ε::Float64 = 1e-3, tol::Float64 = 1e-7, α::Float64 = 1.0)
-
-    # Preprocess outcome variable
-    σ_y = sqrt(var(y, corrected=false))
-    μ_y = mean(y)
-    y_cs = (y .- μ_y) ./ σ_y
-    n = length(y_cs)
 
     # Construct the indicators to produce a basis
     indblocks = BasisBlocks(sections, X, smoothness)
 
     # Construct the basis and variance estimates for the training data
     B = BasisMatrixBlocks(indblocks, X)
+    n = B.nrow
 
     # Fit the initial set of coefficients over the entire dataset
     μ = colmeans(B)
@@ -36,7 +21,7 @@ function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}
     # all coefficients remain 0 after updating for the first time.
     # β will not change from 0 if λ_max > |mean_shift| / α
     if isnothing(λ)
-        corrs = ((transpose(B)*y_cs) .- (μ .* sum(y_cs))) .* invσ
+        corrs = ((transpose(B)*y) .- (μ .* sum(y))) .* invσ
         λ_max = maximum(abs.(corrs)) / n
         λ_min = min_λ_ε * λ_max    
         λ_range = reverse(exp.(range(log(λ_min), log(λ_max), length = λ_grid_length)))
@@ -44,20 +29,20 @@ function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}
         λ_range = sort(λ)
     end
 
-    β, β0 = coord_descent(B, y_cs, μ, invσ, σ2, λ_range; outer_max_iters = outer_max_iters, inner_max_iters = inner_max_iters, tol = tol, α = α)
+    β, β0 = coord_descent(B, y, μ, invσ, σ2, λ_range; outer_max_iters = outer_max_iters, inner_max_iters = inner_max_iters, tol = tol, α = α)
 
     # Split the data into K folds
     folds = split_folds(sample(1:n, n), n, K)
 
     # Cross-fit the highly adaptive lasso to select best lambda
-    mse = Vector{Matrix{Float64}}(undef, K)
+    dev = Vector{Matrix{Float64}}(undef, K)
     for k in 1:K
         # Split the data into training and testing folds
         train = reduce(vcat, folds[Not(k)])
         val = folds[k]
 
         Bt = B[train]
-        yt = y_cs[train]
+        yt = y[train]
 
         # Compute variables to center and scale each training column implicitly in the coordinate descent algorithm
         μt = (transpose(Bt) * ones(Bt.nrow)) ./ Bt.nrow
@@ -70,27 +55,25 @@ function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}
 
         # Evaluate mean-squared error on validation set
         Bv = B[val]
-        predv = (Bv * βt) .+ β0t
+        predv = 1 ./ (1 .+ exp.(-((Bv * βt) .+ β0t)))
 
-        yv = y_cs[val]
-        mse[k] = mean((yv .- predv).^2, dims=1)
+        yv = y[val]
+        dev[k] = -mean(yv .* log.(predv) .+ (1 .- yv) .* log.(1 .- predv), dims=1)
     end
 
     # Compute which λ value was best over the cross-validated folds
-    mse_matrix = vcat(mse...)
-    test_mse = vec(mean(mse_matrix, dims = 1))
-    best_index = argmin(test_mse)
+    dev_matrix = vcat(dev...)
+    test_dev = vec(mean(dev_matrix, dims = 1))
+    best_index = argmin(test_dev)
 
-    # Rescale the fitted coefficients to be on the original scale of y
-    β_final = β[:, best_index] .* σ_y
-
-    # Add mean of y to the intercept
-    β0_final = (β0[best_index]* σ_y) + μ_y
+    # Obtain coefficients corresponding to best λ value
+    β_final = β[:, best_index]
+    β0_final = β0[best_index]
 
     return RandomHALParameters(indblocks, vec(β_final), β0_final, λ_range[best_index])
 end
 
-function predict_randomhal(model::RandomHALParameters, X::AbstractMatrix)
+function predict_randomhal_binom(model::RandomHALParameters, X::AbstractMatrix)
     B = BasisMatrixBlocks(model.indblocks, X)
-    return (B * model.β) .+ model.β0
+    return 1 ./ (1 .+ exp.(-((B * model.β) .+ model.β0)))
 end

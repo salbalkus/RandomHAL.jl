@@ -2,7 +2,7 @@
 # that takes advantage of the fast HAL basis structure
 
 soft_threshold(z::Float64, λ::Float64) = sign(z) * max(0, abs(z) - λ)
-conv_crit(β_prev::Vector{Float64}, β_next::Vector{Float64}, σ2::Vector{Float64}) = maximum(σ2 .* (β_next .- β_prev).^2)
+conv_crit(β_prev::Vector{Float64}, β_next::Vector{Float64}, σ2::Vector{Float64}) = maximum((β_next .- β_prev).^2)#maximum(σ2 .* (β_next .- β_prev).^2)
 
 # This function currently produces a lot of allocations. 
 # May be able to reduce these with clever programming tricks
@@ -69,16 +69,12 @@ function cycle_coord!(active::BitVector, β, β_prev, X::BasisMatrixBlocks, res,
     end
 end
 
-function coord_descent(X::BasisMatrixBlocks, y::Vector{Float64}, μ::Vector{Float64}, σ2::Vector{Float64}, λ_range::Vector{Float64}; outer_max_iters::Int64 = 1000, inner_max_iters::Int64 = 1000, tol::Float64 = 1e-7, α::Float64 = 1.0)
+function coord_descent(X::BasisMatrixBlocks, y::Vector{Float64}, μ::Vector{Float64}, invσ::Vector{Float64}, σ2::Vector{Float64}, λ_range::Vector{Float64}; outer_max_iters::Int64 = 1000, inner_max_iters::Int64 = 1000, tol::Float64 = 1e-7, α::Float64 = 1.0)
 
     # Check input
     n = X.nrow
     d = X.ncol
     n == length(y) || error("Number of rows in X must match length of y")
-
-    # Compute inverse standard deviation for scaling
-    invσ = 1 ./ sqrt.(σ2) # This is right
-    invσ[isinf.(invσ)] .= 0.0  # Handle zero-variance basis functions
 
     # Precompute some quantities for cycling
     l_sum = left_sum(transpose(X))
@@ -116,10 +112,6 @@ function coord_descent(X::BasisMatrixBlocks, y::Vector{Float64}, μ::Vector{Floa
         next_active = copy(active)
         outer_iteration = 1
 
-        # Run an initial update
-        cycle_coord!(trues(d), β_next, β_prev, X, res, l_sum, l_squares, r_shift, nz_count, μ, invσ, lasso_penalty, ridge_penalty)
-        β_prev .= β_next
-
         # Begin iterative descent
         while (outer_iteration < outer_max_iters)
             # Update the active set and norm for next sub-cycle
@@ -151,7 +143,11 @@ function coord_descent(X::BasisMatrixBlocks, y::Vector{Float64}, μ::Vector{Floa
         # Store final output
         β[:, λ_index] = β_next
     end
-    return β
+
+    # Construct intercept and scale coefficients back to original scale
+    scaled_path = (β .* invσ)
+    β0 = mean(y) .- (reshape(μ, 1, d) * scaled_path)
+    return scaled_path, β0
 end
 
 

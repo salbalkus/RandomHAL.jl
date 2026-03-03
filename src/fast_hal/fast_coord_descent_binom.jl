@@ -120,16 +120,6 @@ function coord_descent_binom(X::BasisMatrixBlocks, y::Vector, μ::Vector{Float64
             active = trues(d)
             next_active = copy(active)   
 
-            # Run an initial update
-            # Note the reason we update the intercept separately is because it is a Float not passed by reference,
-            # so we need to update β0_prev outside of a function call
-            β0_next = mean(z .- lin_preds .+ β0_next)
-            lin_preds .+= β0_next .- β0_prev
-            cycle_coord_binom!(trues(d), β_next, β_prev, X, hessian_bound, z, lin_preds, l_sum, l_squares, r_shift, nz_sum, μ, invσ, lasso_penalty)
-            β_prev .= β_next
-            β0_prev = β0_next
-
-
             # Begin iterative descent
             outer_iteration = 1
             while (outer_iteration < outer_max_iters)
@@ -190,5 +180,9 @@ function coord_descent_binom(X::BasisMatrixBlocks, y::Vector, μ::Vector{Float64
         β[:, λ_index] = β_next
         β0[λ_index] = β0_next
     end
-    return β, β0
+
+    # Construct intercept and scale coefficients back to original scale
+    scaled_path = (β .* invσ)
+    β0 .-= vec(reshape(μ, 1, d) * scaled_path)
+    return scaled_path, β0
 end

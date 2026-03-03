@@ -25,13 +25,13 @@ dgp = @dgp(
         #X8 ~ Normal.(1 .- cos.(2*pi*X2), 0.0001),
         #X9 ~ Normal.((X3 .- 0.5) .* ((X3 .> 0.5) - (X3 .< 0.5)), 0.0),
 
-        A ~ (@. Bernoulli(logistic(6 * X2 - 3))),
-        #A ~ (@. Bernoulli(logistic((X2 + X2^2 + X3 + X3^2 + X4 + X4^2 + X2 * X3) - 2.5))),
+        #A ~ (@. Bernoulli(logistic(6 * X2 - 3))),
+        A ~ (@. Bernoulli(logistic((X2 + X2^2 + X3 + X3^2 + X4 + X4^2 + X2 * X3) - 2.5))),
         #Y ~ (@. Normal(A + X2 * X3 + A * X2 + A * X4 + 0.2 * (sqrt(10*X3*X4) + sqrt(10 * X2) + sqrt(10 * X3) + sqrt(10*X4)), 0.01))
-        Y ~ (@. Normal(sin.(2*pi * X2), 0.1)) # + sin(2*pi*X3) + sin(2*pi*X4), 0.1))
+        Y ~ (@. Normal(sin.(2*pi * X2) + sin(2*pi*X3) + sin(2*pi*X4) .+ A, 0.1))
     )
 scm = StructuralCausalModel(dgp, :A, :Y)
-n = 400
+n = 100
 ct = rand(scm, n)
 X = Tables.Columns(responseparents(ct))
 Xm = Tables.matrix(X)
@@ -133,7 +133,7 @@ end
     # Set up inputs
     smoothness = 1
     ycs = (y .- mean(y)) ./ sqrt(var(y, corrected=false))
-    S = collect(combinations([1,2,3]))[2:end]
+    S = collect(combinations([1,2,3, 4]))[2:end]
     indb = BasisBlocks(S, Xm, smoothness)
     B = BasisMatrixBlocks(indb, Xm)
     μ = colmeans(B)
@@ -156,12 +156,10 @@ end
 
     # Run the algorithm
     λ_range = [0.1, 0.01, 0.001, 0.0001]
-    @time path = coord_descent(B, ycs, μ_true, σ2_true, λ_range; outer_max_iters = 1000, inner_max_iters = 1000, tol = 10e-8)
-    # Make sure we get close to a reasonable solution
-    
-    path_scaled = path .* invσ
-    preds = B * path_scaled .- (reshape(μ, 1, B.ncol) * path_scaled)# .+ mean(y)
+    @time path, β0 = coord_descent(B, ycs, μ, invσ, σ2, λ_range; outer_max_iters = 100, inner_max_iters = 100)
+    preds = B * path .+ β0
 
+    # Make sure we get close to a reasonable solution
     mse = [mean((preds[:, i] .- ycs).^2) for i in 1:size(path, 2)]
     @test all(mse .< 0.5)
     @test mse[2] < mse[1]
@@ -175,7 +173,7 @@ end
     glmnet_mse = [mean((GLMNet.predict(glmnet_fit, B2)[:, i] .- ycs).^2) for i in 1:length(λ_range)]
 
     abs_diff = abs.(glmnet_mse .- mse)
-    @test all(abs_diff .< 0.01)
+    @test all(abs_diff .< 0.001)
 
 end
 
@@ -184,12 +182,12 @@ end
     ycs = (y .- mean(y)) ./ sqrt(var(y, corrected=false))
 
     # Set up model parameters
-    S = collect(combinations([1,2,3]))[2:end]
+    S = collect(combinations([1,2,3,4]))[2:end]
     min_λ_ε = 0.001
     λ_grid_length = 100
     smoothness = 1
 
-    @time model = fast_fit_cv_randomhal(S, Xm, ycs; smoothness = smoothness, K = 10, min_λ_ε = min_λ_ε, λ_grid_length = λ_grid_length, tol = 10e-6) 
+    @time model = fast_fit_cv_randomhal(S, Xm, ycs; smoothness = smoothness, K = 10, min_λ_ε = min_λ_ε, λ_grid_length = λ_grid_length) 
     
     preds = predict_randomhal(model, Xm)
     mse = mean((ycs .- preds).^2)
@@ -202,7 +200,12 @@ end
     B2 = (B * Matrix(I, B.ncol, B.ncol))
     
     # Set up grid so that glmnet is consistent with our method
-    λ_max = maximum(abs.(transpose(B)*ycs)) / n
+    μ = colmeans(B)
+    σ2 = (squares(transpose(B)) ./ B.nrow) .- (μ.^2)
+    invσ = 1 ./ sqrt.(σ2)
+    invσ[isinf.(invσ)] .= 0.0
+    corrs = ((transpose(B)*ycs) .- (μ .* sum(ycs))) .* invσ
+    λ_max = maximum(abs.(corrs)) / n
     λ_min = min_λ_ε * λ_max    
     λ_range = reverse(exp.(range(log(λ_min), log(λ_max), length = λ_grid_length)))
     
@@ -215,19 +218,20 @@ end
 
 @testset "MLJ Interface" begin
     # Instantiate an MLJ model with mostly default parameters
+    Random.seed!(1234)
+
     model = RandomHALRegressor(smoothness = 1)
     mach = machine(model, X, y) |> MLJBase.fit!
 
     # Make sure our predictions work well
     preds = MLJBase.predict(mach, X)
     mse = mean((y .- preds).^2)
-    @test mse < 0.01
+    @test mse < 0.1
 end
 
-#@testset "Logistic Regression" begin
-    smoothness = 0
-    #S = collect(combinations([1,2,3]))[2:end]
-    S = [[1]]
+@testset "Logistic regression coordinate descent" begin
+    smoothness = 1
+    S = collect(combinations([1,2,3]))[2:end]
     indb = BasisBlocks(S, Xm, smoothness)
     B = BasisMatrixBlocks(indb, Xm)
     μ = colmeans(B)
@@ -237,7 +241,6 @@ end
     invσ[isinf.(invσ)] .= 0.0 
 
     B2 = (B * Matrix(I, B.ncol, B.ncol))
-
 
     # Test the weighted variance and mean for IRLS
     w = rand(n)
@@ -254,11 +257,10 @@ end
     @test vec(sum(B2 .* 0.25, dims=1)) ≈ colmeans(B) .* (n * 0.25)
     @test vec(sum(0.25 .* (B2.^2), dims=1)) ≈ squares(transpose(B)) .* 0.25
 
-    λ_range = [0.5, 0.1, 0.05, 0.01, 0.001]
-    @time path, β0 = coord_descent_binom(B, A, μ, σ2, λ_range; tol = 10e-6)
+    λ_range = [0.1, 0.05, 0.01, 0.001]
+    @time path, β0 = coord_descent_binom(B, A, μ, σ2, λ_range)
 
-    path_scaled = path .* invσ
-    lin_preds = B * path_scaled .- (reshape(μ, 1, B.ncol) * path_scaled) .+ β0'
+    lin_preds = (B * path) .+ β0'
     preds = 1 ./ (1 .+ exp.(-lin_preds))
     mse = [mean((preds[:, i] .- A).^2) for i in 1:size(path, 2)]
 
@@ -267,10 +269,62 @@ end
     glmnet_preds = GLMNet.predict(glmnet_fit, B2, outtype = :prob)
     glmnet_mse = [mean((GLMNet.predict(glmnet_fit, B2, outtype = :prob)[:, i] .- A).^2) for i in 1:length(glmnet_fit.lambda)]
 
-    i = 4
-    scatter(Xm[:, 1], A)
-    scatter!(Xm[:, 1], A .* true_pr .+ (1 .- A) .* (1 .- true_pr))
-    scatter!(Xm[:, 1], preds[:, i])
-    scatter!(Xm[:, 1], glmnet_preds[:, i])
+    abs_diff = abs.(glmnet_mse .- mse)
+    @test all(abs_diff .< 0.01)
+end
 
+@testset "Cross-validated logistic regression" begin#
+    # Set up model parameters
+    S = collect(combinations([1,2,3]))[2:end]
+    min_λ_ε = 0.001
+    λ_grid_length = 100
+    smoothness = 1
+
+    @time model = fast_fit_cv_randomhal_binom(S, Xma, Float64.(A); smoothness = smoothness, K = 10, min_λ_ε = min_λ_ε, λ_grid_length = λ_grid_length) 
+    
+    preds = predict_randomhal_binom(model, Xm)
+    dev = mean(A .* log.(preds) .+ (1 .- A) .* log.(1 .- preds))
+    mse = mean((true_pr .- preds).^2)
+    @test mse < 0.1
+
+    # How does this compare to glmnet?
+    # Instantiate full basis
+    indb = BasisBlocks(S, Xm, smoothness)
+    B = BasisMatrixBlocks(indb, Xm)
+    B2 = (B * Matrix(I, B.ncol, B.ncol))
+    
+    # Set up grid so that glmnet is consistent with our method
+    μ = colmeans(B)
+    σ2 = (squares(transpose(B)) ./ B.nrow) .- (μ.^2)
+    invσ = 1 ./ sqrt.(σ2)
+    invσ[isinf.(invσ)] .= 0.0
+    corrs = ((transpose(B)*A) .- (μ .* sum(A))) .* invσ
+    λ_max = maximum(abs.(corrs)) / n
+    λ_min = min_λ_ε * λ_max    
+    λ_range = reverse(exp.(range(log(λ_min), log(λ_max), length = λ_grid_length)))
+    
+    @time glmnet_fit = glmnetcv(B2, float.([.!(A) A]), Binomial(); lambda = λ_range)
+    glmnet_preds = GLMNet.predict(glmnet_fit, B2, outtype = :prob)
+    glmnet_dev = mean(A .* log.(glmnet_preds) .+ (1 .- A) .* log.(1 .- glmnet_preds))
+    glmnet_mse = mean((true_pr .- glmnet_preds).^2)
+
+    @test abs(mse - glmnet_mse) < 0.1
+
+    #scatter(Xm[:, 1], true_pr)
+    #scatter!(Xm[:, 1], preds)
+    #scatter!(Xm[:, 1], glmnet_preds)
+
+end
+
+@testset "MLJ Interface Logistic Regression" begin
+    # Instantiate an MLJ model with mostly default parameters
+    Random.seed!(1234)
+
+    model = RandomHALClassifier(smoothness = 1)
+    mach = machine(model, Xa, Float64.(A)) |> MLJBase.fit!
+
+    # Make sure our predictions work well
+    preds = MLJBase.predict(mach, Xa)
+    mse = mean((true_pr .- preds).^2)
+    @test mse < 0.1
 end
