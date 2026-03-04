@@ -15,15 +15,15 @@ using RandomHAL
 Random.seed!(1234)
 
 dgp = @dgp(
-        #X1 ~ Bernoulli(0.5),
+        X1 ~ Bernoulli(0.5),
         X2 ~ Beta(1, 1),
         X3 ~ Beta(1, 1),
         X4 ~ Beta(1, 1),
-        #X5 ~ Normal.(X2, 0.01),
-        #X6 ~ Normal.(X3 .* (1 .- (2 .*X1)), 0.001),
-        #X7 ~ Normal.(sin.(2*pi*X2), 0.0001),
-        #X8 ~ Normal.(1 .- cos.(2*pi*X2), 0.0001),
-        #X9 ~ Normal.((X3 .- 0.5) .* ((X3 .> 0.5) - (X3 .< 0.5)), 0.0),
+        X5 ~ Normal.(X2, 0.01),
+        X6 ~ Normal.(X3 .* (1 .- (2 .*X1)), 0.001),
+        X7 ~ Normal.(sin.(2*pi*X2), 0.0001),
+        X8 ~ Normal.(1 .- cos.(2*pi*X2), 0.0001),
+        X9 ~ Normal.((X3 .- 0.5) .* ((X3 .> 0.5) - (X3 .< 0.5)), 0.0),
 
         #A ~ (@. Bernoulli(logistic(6 * X2 - 3))),
         A ~ (@. Bernoulli(logistic((X2 + X2^2 + X3 + X3^2 + X4 + X4^2 + X2 * X3) - 2.5))),
@@ -129,15 +129,16 @@ end
 
 end
 
-@testset "Coordinate descent" begin
+#@testset "Coordinate descent" begin
     # Set up inputs
-    smoothness = 1
+    smoothness = 0
     ycs = (y .- mean(y)) ./ sqrt(var(y, corrected=false))
-    S = collect(combinations([1,2,3, 4]))[2:end]
+    S = collect(combinations([1,2,3,4,10]))[2:end]
     indb = BasisBlocks(S, Xm, smoothness)
     B = BasisMatrixBlocks(indb, Xm)
     μ = colmeans(B)
     σ2 = (squares(transpose(B)) ./ B.nrow) .- (μ.^2)
+    σ2[σ2 .< 0.0] .= 0.0
     invσ = 1 ./ sqrt.(σ2)
     invσ[isinf.(invσ)] .= 0.0 
 
@@ -156,7 +157,7 @@ end
 
     # Run the algorithm
     λ_range = [0.1, 0.01, 0.001, 0.0001]
-    @time path, β0 = coord_descent(B, ycs, μ, invσ, σ2, λ_range; outer_max_iters = 100, inner_max_iters = 100)
+    @profview_allocs path, β0 = coord_descent(B, ycs, μ, invσ, σ2, λ_range; outer_max_iters = 100, inner_max_iters = 100)
     preds = B * path .+ β0
 
     # Make sure we get close to a reasonable solution

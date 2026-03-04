@@ -14,9 +14,20 @@
 end
 
 function MLJBase.fit(model::RandomHALClassifier, verbosity, X, y)
-    sections = collect(combinations(1:DataAPI.ncol(X)))[2:end]
-    Xm = Tables.matrix(X)
+    n = length(y)
+    col_indices = collect(1:DataAPI.ncol(X))
 
+    # First, include all main terms
+    sections = [[i] for i in col_indices]
+
+    # Then, sample ~ 0.5 * log(n) interaction terms from each interaction order
+    for int_order in 2:round(Int, 0.5 * log(n))
+        for _ in 1:round(Int, 0.5 * log(n))
+            push!(sections, sample(col_indices, int_order, replace = false))
+        end
+    end
+
+    Xm = Tables.matrix(X)
     params = fast_fit_cv_randomhal_binom(sections, Xm, y; smoothness = model.smoothness,
                 K = model.nfolds, outer_max_iters = model.outer_max_iters, 
                 inner_max_iters = model.inner_max_iters, λ = nothing, 
