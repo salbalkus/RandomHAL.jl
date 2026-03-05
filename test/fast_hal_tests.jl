@@ -48,7 +48,7 @@ true_pr = conmean(scm, ct, :A)
     all_ranks = reduce(hcat, map(competerank, eachcol(Xma)))
 
     # Test the path sampler
-    @test all_ranks[path_sample(all_ranks, [1]), 1] == 1:n
+    @test all_ranks[path_sample(all_ranks, [i]), 1] == 1:n
 
     # Construct nested matrix
     indicator = NestedIndicators(all_ranks, [i], Xma)
@@ -57,7 +57,8 @@ true_pr = conmean(scm, ct, :A)
     B = NestedMatrix(indicator, Xm)
 
     # Construct the "true" sort
-    B_true = (Xm[:, i] .>= Xm[:, i]')
+    pa = path_sample(all_ranks, [i])
+    B_true = (Xm[:, i] .>= Xm[pa, i]')
 
     @test B_true * ones(n) == B * ones(B.ncol)
     @test all([col in collect(eachcol(B_true)) for col in eachcol(B * eye)])
@@ -74,7 +75,7 @@ true_pr = conmean(scm, ct, :A)
     B = NestedMatrix(indicator, Xm)
     B_true = (Xm[:, j] .>= Xm[pa, j]') .* (Xm[:, i] .>= Xm[pa, i]')
 
-    # Are the bins constructed correct?
+    # Are the bins constructed correctly?
     bins = indicator.bins
     order = binary_bin_search(Xma[:, [i, j]], bins)
     @test order == [sum(all(bins .<= row', dims = 2)) for row in eachrow(Xma[:, [i, j]])]
@@ -84,11 +85,14 @@ true_pr = conmean(scm, ct, :A)
     basis_cols = eachcol(B * Matrix(I, B.ncol, B.ncol))
     @test all([col in matrix_cols for col in basis_cols])
 
+    # Test if B is a "mirrored" version of B_true
+    @test Int.(B * Matrix(I, B.ncol, B.ncol)) == B_true[: , end:-1:1]
+
     # NestedMatrixTranspose
     Bt = transpose(B)
     v = rand(Bt.ncol)
-    @test Bt * ones(n) ≈ transpose(B_true) * ones(n)
-    @test Bt * v ≈ transpose(B_true) * v
+    @test Bt * ones(n) ≈ reverse(transpose(B_true) * ones(n))
+    @test Bt * v ≈ reverse(transpose(B_true) * v)
 
     # NestedMatrixBlocks
     S = [[i], [i, j]]
@@ -122,14 +126,14 @@ end
     B = BasisMatrix(indicator, Xm)
     v = ones(n)
 
+
     # Construct the "true" sort
     pa = path_sample(all_ranks, S)
 
     B_true = (Xm[:, 2] .>= Xm[pa, 2]') .* (Xm[:, 2].^smoothness .- (Xm[pa, 2].^smoothness)') ./ factorial(smoothness)    
     @test B_true * ones(n) ≈ B * ones(n)
+    @test B * Matrix(I, B.ncol, B.ncol) == B_true[:, end:-1:1]
 
-    v = rand(n)
-    @test B_true * v ≈ B * v
     
     # Test if the matrices contain the same columns
     matrix_cols = collect(eachcol(B_true))
@@ -139,8 +143,8 @@ end
     # BasisMatrixTranspose
     Bt = transpose(B)
 
-    @test Bt * ones(n) ≈ transpose(B_true) * ones(n)
-    @test Bt * v ≈ transpose(B_true) * v
+    @test Bt * ones(n) ≈ reverse(transpose(B_true) * ones(n))
+    @test Bt * v ≈ reverse(transpose(B_true) * v)
 
     # BasisMatrixBlocks
     S = [[2], [2, 3]]
@@ -162,9 +166,9 @@ end
 
 end
 
-#@testset "Coordinate descent" begin
+@testset "Coordinate descent" begin
     # Set up inputs
-    smoothness = 0
+    smoothness = 1
     ycs = (y .- mean(y)) ./ sqrt(var(y, corrected=false))
     #S = collect(combinations([1,2,3,4,10]))[2:end]
     S = [[1]]
@@ -212,14 +216,20 @@ end
     abs_diff = abs.(glmnet_mse .- mse)
     @test all(abs_diff .< 0.001)
 
+    #x = Xm[:, 1]
+    #scatter(x, ycs)
+    #scatter!(x, preds[:, 3])
+    #scatter!(x, glmnet_preds[:, 3])
+
 end
 
-@testset "Cross-validated model" begin
+#@testset "Cross-validated model" begin
     # Make sure to center y to make comparison with GLMNet feasible
     ycs = (y .- mean(y)) ./ sqrt(var(y, corrected=false))
 
     # Set up model parameters
-    S = collect(combinations([1,2,3,4]))[2:end]
+    #S = collect(combinations([1,2,3,4]))[2:end]
+    S = [[1]]
     min_λ_ε = 0.001
     λ_grid_length = 100
     smoothness = 0

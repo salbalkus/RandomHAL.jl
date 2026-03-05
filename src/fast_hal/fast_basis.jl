@@ -103,7 +103,22 @@ end
 
 # Multiply a coefficient vector by each indicator basis
 function mul(B::NestedMatrix, v::AbstractVector) # assumes B and v are compatible
-    v_sum = cumsum(v)
+    # Start by obtaining cumulative sum of input vector
+    #v_sum = cumsum(reverse(v))
+    v_sum = Vector{Float64}(undef, B.ncol)
+    v_sum[1] = v[end]
+    for i in 2:B.ncol
+        v_sum[i] = v_sum[i-1] + v[B.ncol - i + 1]
+    end
+
+    # NOTE: For ease of computation within the coordinate descent algorithm,
+    # we want the basis matrix to be "mirrored": that is, start with the "last" 
+    # (maximum knot) basis function
+    # Therefore, we assign bin values in reverse order.
+    # If the reversal is removed, the basis matrix will start with the "first"
+    # (minimum knot) basis function
+
+    # Next we assign cumulative sums to appropriate bins
     out = Vector{Float64}(undef, B.nrow)
     for i in 1:B.nrow
         out[i] = B.order[i] == 0 ? 0.0 : v_sum[B.order[i]]
@@ -141,12 +156,12 @@ function mul(B::NestedMatrixTranspose, v::AbstractVector) # assumes B and v are 
     # Get sum within each bin
     for i in 1:B.ncol
         if (B.order[i] <= B.ncol) && (B.order[i] > 0) # If the observation is in a bin, add its value to the sum for that bin
-            out[B.order[i]] += v[i]
+            out[B.nrow - B.order[i] + 1] += v[i]
         end
     end
     # Cumulatively sum bins in reverse order
-    for i in 1:(B.nrow-1)
-        out[B.nrow - i] += out[B.nrow - i + 1]
+    for i in 2:B.nrow
+        out[i] += out[i - 1]
     end
     return out
 end
@@ -249,7 +264,7 @@ function Basis(all_ranks::AbstractMatrix{Int64}, section::AbstractVector{Int64},
     indicators = NestedIndicators(all_ranks, section, X)
     intercept = smoothness == 0 ? zeros(length(indicators.path)) : (vec(prod(X[indicators.path, section], dims=2) .^ smoothness) ./ factorial(smoothness))
     # Make sure the intercept is sorted because F multiplies from largest to smallest
-    return Basis(indicators, smoothness, intercept)
+    return Basis(indicators, smoothness, reverse(intercept))
 end
 
 function subsample(basis::Basis, max_block_size::Int)
