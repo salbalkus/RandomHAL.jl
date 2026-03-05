@@ -46,8 +46,10 @@ module RandomHAL
 
     # New fast basis stuff
     include("fast_hal/fast_basis.jl")
+    export path_sample, binary_bin_search
     export NestedIndicators, NestedIndicatorBlocks, NestedMatrix, NestedMatrixBlocks 
     export Basis, BasisBlocks, BasisMatrix, BasisMatrixBlocks
+    export subsample
     export transpose, colmeans, squares, left_sum, left_squares, nonzero_count, nonzero_sum, wls_reweight
     export mul, mul!, *
 

@@ -3,15 +3,15 @@
 DIM_ERRMSG = "Number of columns of NestedMatrix must match number of rows of vector being multiplied."
 
 abstract type AbstractNestedMatrix end
-### Utility Functions ###
+
 # Given a matrix of ranks and a section, construct a nested path of bins
-function path_sample(all_ranks::AbstractMatrix{Int64}, S::AbstractVector{Int64}; start = 1)
+function path_sample(all_ranks::AbstractMatrix{Int64}, S::AbstractVector{Int64}; start=1)
 
     # Filter the ranks to only the sampled section
     ranks_orig = all_ranks[:, S]
 
     # Sort the observations by their maximum rank, so we can iterate through them in order
-    max_rank_order = sortperm(vec(maximum(ranks_orig, dims = 2)))
+    max_rank_order = sortperm(vec(maximum(ranks_orig, dims=2)))
     ranks = ranks_orig[vec(max_rank_order), :]
 
     # Start the path at the first observation
@@ -24,8 +24,8 @@ function path_sample(all_ranks::AbstractMatrix{Int64}, S::AbstractVector{Int64};
 
     # Construct a path of nested ranks
     @views while (i + k <= n)
-        if all(ranks[i + k, :] .>= ranks[i, :])
-            append!(path, i+k)
+        if all(ranks[i+k, :] .>= ranks[i, :])
+            append!(path, i + k)
             i = i + k
             k = 1
         else
@@ -40,24 +40,27 @@ end
 
 # Given a set of nested bins and a vector of observations, output a vector of indices that labels in which bin each observation is contained.
 # This will become "order" in a NestedMatrix
-function binary_bin_search(X::AbstractMatrix{T}, bins::AbstractMatrix{T}) where T <: Number
+function binary_bin_search(X::AbstractMatrix{T}, bins::AbstractMatrix{T}) where T<:Number
     # Check input validity
     size(bins, 2) != size(X, 2) && error("In a binary bin search, the width of each bin must be the same as the width of the input matrix.")
 
     # Set up tracking variables to perform a binary search for each observation simultaneously
     n = size(X, 1)
-    lh = hcat(fill(1, n), fill(size(bins, 1), n))
-    mid = lh[:,1] .+ (lh[:,2] .- lh[:,1]) .÷ 2
+    lh = hcat(fill(0, n), fill(size(bins, 1), n))
+    mid = lh[:, 1] .+ (lh[:, 2] .- lh[:, 1]) .÷ 2
+    not_yet_finished = 1:n
 
     # Keep halving the search area within nested bins until we've narrowed to a single bin
-    while any(lh[:,1] .+ 1 .< lh[:,2])
-        checks = vec(all(X .<= bins[mid, :], dims = 2) .+ 1)
-        lh[[CartesianIndex(i, checks[i]) for i in 1:n]] .= mid
-        mid = lh[:,1] .+ (lh[:,2] .- lh[:,1]) .÷ 2
+    while any(lh[:, 1] .+ 1 .< lh[:, 2])
+        checks = vec(any(X[not_yet_finished, :] .< bins[mid[not_yet_finished], :], dims=2) .+ 1)
+        lh[[CartesianIndex(not_yet_finished[i], checks[i]) for i in 1:length(not_yet_finished)]] .= mid[not_yet_finished]
+        mid[not_yet_finished] .= lh[not_yet_finished, 1] .+ (lh[not_yet_finished, 2] .- lh[not_yet_finished, 1]) .÷ 2
+
+        # Track which entries have finished the search
+        not_yet_finished = findall(lh[:, 1] .+ 1 .< lh[:, 2])
     end
-    # For the output, we can always take the highest, since the only one that violates this is
-    # the lowest bin, for which we wind up with low == high anyways
-    return lh[:,2]
+    # For the output, take the lowest bin
+    return lh[:, 1]
 end
 
 ### Nested Indicators Structure ###
@@ -65,10 +68,22 @@ struct NestedIndicators
     section::AbstractVector{Int64}
     bins::AbstractMatrix
     path::AbstractVector{Int64}
-    function NestedIndicators(all_ranks::AbstractMatrix{Int64}, section::AbstractVector{Int64}, X::AbstractMatrix)
-        path = path_sample(all_ranks, section; start = 1)
-        bins = vcat(X[path, section], fill(Inf, length(section))')
-        return new(section, bins, path)
+end
+
+function NestedIndicators(all_ranks::AbstractMatrix{Int64}, section::AbstractVector{Int64}, X::AbstractMatrix)
+    path = path_sample(all_ranks, section; start=1)
+    bins = vcat(X[path, section], fill(Inf, length(section))')
+    return NestedIndicators(section, bins, path)
+end
+
+function subsample(indb::NestedIndicators, max_block_size::Int)
+    # Subsample only m observations from the path and bins
+    if max_block_size < length(indb.path)
+        new_indices = sort(sample(1:length(indb.path), max_block_size, replace=false))
+        return NestedIndicators(indb.section, indb.bins[vcat(new_indices, length(indb.path) + 1), :], indb.path[new_indices])
+    else
+        # Otherwise, if we are asked to sample more than the number of bins in the path, just return the original object
+        return indb
     end
 end
 
@@ -81,30 +96,19 @@ end
 
 function NestedMatrix(M::NestedIndicators, X::AbstractMatrix)
     order = binary_bin_search(X[:, M.section], M.bins)
-    return NestedMatrix(order, size(M.bins, 1)-1, length(order))
+    return NestedMatrix(order, size(M.bins, 1) - 1, length(order))
 end
 
 # Matrix-free multiplication #
 
 # Multiply a coefficient vector by each indicator basis
-#mul(B::NestedMatrix, v::AbstractVector) = vcat(cumsum(reverse(v)),[0])[B.order] # Assumes v and B have compatible length
-
 function mul(B::NestedMatrix, v::AbstractVector) # assumes B and v are compatible
+    v_sum = cumsum(v)
     out = Vector{Float64}(undef, B.nrow)
-    tmp = Vector{Float64}(undef, B.ncol+1)
-    
+    for i in 1:B.nrow
+        out[i] = B.order[i] == 0 ? 0.0 : v_sum[B.order[i]]
+    end
     # Perform reverse cumulative sum
-    s = 0.0
-    @inbounds for i in B.ncol:-1:1
-        s += v[i]
-        tmp[B.ncol - i + 1] = s
-    end
-    tmp[B.ncol + 1] = 0.0
-
-    # Add up results for each entry of output column
-    @inbounds for i in 1:B.nrow
-        out[i] = tmp[B.order[i]]
-    end
     return out
 end
 
@@ -134,26 +138,17 @@ end
 # TODO: Might be able to restructure this to eke out a little more performance
 function mul(B::NestedMatrixTranspose, v::AbstractVector) # assumes B and v are compatible
     out = zeros(B.nrow)
-    for i in 1:length(v)
-        if B.order[i] > B.nrow
-            continue
+    # Get sum within each bin
+    for i in 1:B.ncol
+        if (B.order[i] <= B.ncol) && (B.order[i] > 0) # If the observation is in a bin, add its value to the sum for that bin
+            out[B.order[i]] += v[i]
         end
-        out[length(out) - B.order[i] + 1] += v[i]
     end
-    cumsum!(out, out)
+    # Cumulatively sum bins in reverse order
+    for i in 1:(B.nrow-1)
+        out[B.nrow - i] += out[B.nrow - i + 1]
+    end
     return out
-end
-
-# inplace version
-function mul!(out::AbstractVector, B::NestedMatrixTranspose, v::AbstractVector) # assumes B and v are compatible
-    out .= zeros(length(out))
-    for i in 1:length(v)
-        if B.order[i] > B.nrow
-            continue
-        end
-        out[length(out) - B.order[i] + 1] += v[i]
-    end
-    cumsum!(out, out)
 end
 
 function Base.:*(B::NestedMatrixTranspose, v::AbstractVector)
@@ -175,11 +170,14 @@ transpose(B::NestedMatrixTranspose) = NestedMatrix(B.order, B.nrow, B.ncol)
 ### Blocks of NestedIndicators
 struct NestedIndicatorBlocks
     blocks::AbstractVector{NestedIndicators}
-    function NestedIndicatorBlocks(sections::AbstractVector{<:AbstractVector{Int64}}, X::AbstractMatrix)
-        all_ranks = reduce(hcat, map(competerank, eachcol(X)))
-        return new([NestedIndicators(all_ranks::AbstractMatrix{Int64}, section::AbstractVector{Int64}, X::AbstractMatrix) for section in sections])
-    end
 end
+
+function NestedIndicatorBlocks(sections::AbstractVector{<:AbstractVector{Int64}}, X::AbstractMatrix)
+    all_ranks = reduce(hcat, map(competerank, eachcol(X)))
+    return NestedIndicatorBlocks([NestedIndicators(all_ranks::AbstractMatrix{Int64}, section::AbstractVector{Int64}, X::AbstractMatrix) for section in sections])
+end
+
+subsample(indb::NestedIndicatorBlocks, max_block_size::Int) = NestedIndicatorBlocks([subsample(block, max_block_size) for block in indb.blocks])
 
 struct NestedMatrixBlocks <: AbstractNestedMatrix
     blocks::AbstractVector{NestedMatrix}
@@ -197,38 +195,7 @@ end
 function mul(B::NestedMatrixBlocks, v::AbstractVector, block_col_ind) # assumes B and v are compatible
     block_starts = vcat([0], cumsum(block_col_ind))
     block_ranges = [(block_starts[i-1]+1):block_starts[i] for i in 2:length(block_starts)]
-    output = zeros(B.blocks[1].nrow)
-    for i in 1:length(B.blocks)
-        output .+= mul(B.blocks[i], v[block_ranges[i]])
-    end
-    return output
-end
-
-function mul!(out::AbstractVector, tmp::AbstractVector, B::NestedMatrixBlocks, v::AbstractVector) # assumes B and v are compatible
-    out .= 0.0
-    block_start = 1
-    block_end = 0
-    
-    # Iterate through each block
-    for b in B.blocks
-        block_end = block_end + b.ncol
-
-        # Perform reverse cumulative sum
-        s = 0.0
-        @inbounds for i in block_end:-1:block_start
-            s += v[i]
-            tmp[block_end - i + block_start] = s
-        end
-
-        # Add up results for each entry of output column
-        @inbounds for i in 1:B.nrow
-            idx = b.order[i]
-            if idx <= b.ncol
-                out[i] += tmp[block_start + idx - 1]
-            end
-        end
-        block_start = block_end + 1
-    end
+    return reduce(+, map(i -> mul(B.blocks[i], v[block_ranges[i]]), 1:length(B.blocks)))
 end
 
 function Base.:*(B::NestedMatrixBlocks, v::AbstractVector)
@@ -276,11 +243,24 @@ struct Basis
     indicators::NestedIndicators
     smoothness::Int64
     intercept::AbstractVector{Float64}
-    function Basis(all_ranks::AbstractMatrix{Int64}, section::AbstractVector{Int64}, X::AbstractMatrix, smoothness::Int64)
-        indicators = NestedIndicators(all_ranks, section, X)
-        intercept = smoothness == 0 ? zeros(length(indicators.path)) : (vec(prod(X[indicators.path, section], dims = 2) .^ smoothness) ./ factorial(smoothness))
-        # Make sure the intercept is sorted because F multiplies from largest to smallest
-        return new(indicators, smoothness, reverse(intercept))
+end
+
+function Basis(all_ranks::AbstractMatrix{Int64}, section::AbstractVector{Int64}, X::AbstractMatrix, smoothness::Int64)
+    indicators = NestedIndicators(all_ranks, section, X)
+    intercept = smoothness == 0 ? zeros(length(indicators.path)) : (vec(prod(X[indicators.path, section], dims=2) .^ smoothness) ./ factorial(smoothness))
+    # Make sure the intercept is sorted because F multiplies from largest to smallest
+    return Basis(indicators, smoothness, intercept)
+end
+
+function subsample(basis::Basis, max_block_size::Int)
+    # Subsample only m observations from the path and bins
+    if max_block_size < length(basis.indicators.path)
+        new_indices = sort(sample(1:length(basis.indicators.path), max_block_size, replace=false))
+        indicators = NestedIndicators(basis.indicators.section, basis.indicators.bins[vcat(new_indices, length(basis.indicators.path) + 1), :], basis.indicators.path[new_indices])
+        return Basis(indicators, basis.smoothness, basis.intercept[new_indices])
+    else
+        # Otherwise, if we are asked to sample more than the number of bins in the path, just return the original object
+        return basis
     end
 end
 
@@ -295,11 +275,28 @@ end
 
 function BasisMatrix(B::Basis, X::AbstractMatrix)
     F = NestedMatrix(B.indicators, X)
-    l = vec(prod(X[:, B.indicators.section], dims = 2) .^ B.smoothness) ./ factorial(B.smoothness)
+    l = vec(prod(X[:, B.indicators.section], dims=2) .^ B.smoothness) ./ factorial(B.smoothness)
     BasisMatrix(F, l, B.intercept, B.smoothness, F.ncol, F.nrow)
 end
 
 mul(B::BasisMatrix, v::AbstractVector) = ((B.l .* mul(B.F, v)) .- mul(B.F, B.r .* v))
+
+#= function mul(B::BasisMatrix, v::AbstractVector) # assumes B and v are compatible
+    v_sum = Vector{Float64}(undef, B.ncol)
+    vr_sum = Vector{Float64}(undef, B.ncol)
+    v_sum[1] = v[1]
+    vr_sum[1] = B.r[1] * v[1]
+
+    for i in 2:B.ncol
+        v_sum[i] = v_sum[i-1] + v[i]
+    end
+
+    out = Vector{Float64}(undef, B.nrow)
+    for i in 1:B.nrow
+        out[i] = B.order[i] == 0 ? 0.0 : v_sum[B.order[i]]
+    end
+    return out
+end =#
 
 function Base.:*(B::BasisMatrix, v::AbstractVector)
     length(v) != B.ncol && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
@@ -342,11 +339,14 @@ transpose(B::BasisMatrixTranspose) = BasisMatrix(transpose(B.F), B.l, B.r, B.smo
 
 struct BasisBlocks
     blocks::AbstractVector{Basis}
-    function BasisBlocks(sections::AbstractVector{<:AbstractVector{Int64}}, X::AbstractMatrix, smoothness::Int64)
-        all_ranks = reduce(hcat, map(competerank, eachcol(X)))
-        return new([Basis(all_ranks, section, X, smoothness) for section in sections])
-    end
 end
+
+function BasisBlocks(sections::AbstractVector{<:AbstractVector{Int64}}, X::AbstractMatrix, smoothness::Int64)
+    all_ranks = reduce(hcat, map(competerank, eachcol(X)))
+    return BasisBlocks([Basis(all_ranks, section, X, smoothness) for section in sections])
+end
+
+subsample(indb::BasisBlocks, max_block_size::Int) = BasisBlocks([subsample(block, max_block_size) for block in indb.blocks])
 
 struct BasisMatrixBlocks <: AbstractNestedMatrix
     blocks::AbstractVector{BasisMatrix}
@@ -420,7 +420,7 @@ end
 colmeans(B::BasisMatrixBlocks) = colmeans(B, ones(B.nrow) ./ B.nrow)
 
 function squares(B::BasisMatrixTranspose, w::AbstractVector{Float64})
-    return (mul(B.F, w .* B.l.^2) .+ (B.r.^2 .* mul(B.F, w)) .- 2 .* B.r .* mul(B.F, w .* B.l))
+    return (mul(B.F, w .* B.l .^ 2) .+ (B.r .^ 2 .* mul(B.F, w)) .- 2 .* B.r .* mul(B.F, w .* B.l))
 end
 
 squares(B::BasisMatrixTranspose) = squares(B, ones(B.ncol))
@@ -442,8 +442,8 @@ function left_sum(B::BasisMatrixBlocksTranspose, w::AbstractVector{Float64})
     reduce(vcat, [left_sum(block, w) for block in B.blocks])
 end
 
-left_squares(B::BasisMatrixTranspose) = mul(B.F, B.l.^2)
-left_squares(B::BasisMatrixTranspose, w::AbstractVector{Float64}) = mul(B.F, w .* B.l.^2)
+left_squares(B::BasisMatrixTranspose) = mul(B.F, B.l .^ 2)
+left_squares(B::BasisMatrixTranspose, w::AbstractVector{Float64}) = mul(B.F, w .* B.l .^ 2)
 
 
 function left_squares(B::BasisMatrixBlocksTranspose)

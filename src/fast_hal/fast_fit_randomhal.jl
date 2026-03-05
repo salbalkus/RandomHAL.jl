@@ -7,7 +7,7 @@ mutable struct RandomHALParameters
     best_λ::Float64
 end
 
-function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}, X::AbstractMatrix, y::AbstractVector{Float64}; 
+function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}, X::AbstractMatrix, y::AbstractVector{Float64}, max_block_size::Int; 
     smoothness::Int64 = 0, K::Int64 = 10, outer_max_iters::Int64 = 1000, inner_max_iters::Int64 = 1000, 
     λ = nothing, λ_grid_length::Int64 = 100, min_λ_ε::Float64 = 1e-3, tol::Float64 = 1e-7, α::Float64 = 1.0)
 
@@ -18,7 +18,7 @@ function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}
     n = length(y_cs)
 
     # Construct the indicators to produce a basis
-    indblocks = BasisBlocks(sections, X, smoothness)
+    indblocks = subsample(BasisBlocks(sections, X, smoothness), max_block_size)
 
     # Construct the basis and variance estimates for the training data
     B = BasisMatrixBlocks(indblocks, X)
@@ -69,7 +69,7 @@ function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}
 
         # Evaluate mean-squared error on validation set
         Bv = B[val]
-        predv = (Bv * βt) .+ β0t
+        predv = (Bv * βt) .+ β0t'
 
         yv = y_cs[val]
         mse[k] = mean((yv .- predv).^2, dims=1)

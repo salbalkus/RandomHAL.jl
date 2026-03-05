@@ -1,10 +1,10 @@
-function fast_fit_cv_randomhal_binom(sections::AbstractVector{<:AbstractVector{Int64}}, X::AbstractMatrix, y::AbstractVector{Float64}; 
+function fast_fit_cv_randomhal_binom(sections::AbstractVector{<:AbstractVector{Int64}}, X::AbstractMatrix, y::AbstractVector{Float64}, max_block_size::Int; 
     smoothness::Int64 = 0, K::Int64 = 10, outer_max_iters::Int64 = 1000, inner_max_iters::Int64 = 1000, 
     λ = nothing, λ_grid_length::Int64 = 100, min_λ_ε::Float64 = 1e-3, tol::Float64 = 1e-7, α::Float64 = 1.0)
 
     # Construct the indicators to produce a basis
-    indblocks = BasisBlocks(sections, X, smoothness)
-
+    #indblocks = subsample(RandomHAL.BasisBlocks(sections, X, smoothness), max_block_size)
+    indblocks = RandomHAL.BasisBlocks(sections, X, smoothness)
     # Construct the basis and variance estimates for the training data
     B = BasisMatrixBlocks(indblocks, X)
     n = B.nrow
@@ -29,7 +29,8 @@ function fast_fit_cv_randomhal_binom(sections::AbstractVector{<:AbstractVector{I
         λ_range = sort(λ)
     end
 
-    β, β0 = coord_descent(B, y, μ, invσ, σ2, λ_range; outer_max_iters = outer_max_iters, inner_max_iters = inner_max_iters, tol = tol, α = α)
+    β, β0 = coord_descent_binom(B, y, μ, σ2, λ_range; outer_max_iters = outer_max_iters, inner_max_iters = inner_max_iters, tol = tol, α = α)
+    β, β0 = coord_descent_binom(B, y, μ, σ2, λ_range)
 
     # Split the data into K folds
     folds = split_folds(sample(1:n, n), n, K)
@@ -48,17 +49,17 @@ function fast_fit_cv_randomhal_binom(sections::AbstractVector{<:AbstractVector{I
         μt = (transpose(Bt) * ones(Bt.nrow)) ./ Bt.nrow
         σ2t = (squares(transpose(Bt)) ./ Bt.nrow) .- (μt.^2)
         σ2t[σ2t .< 0.0] .= 0.0 # Handle numerical issues with negative variance estimates
-        invσt = 1 ./ sqrt.(σ2t)
-        invσt[isinf.(invσt)] .= 0.0
 
-        βt, β0t = coord_descent(Bt, yt, μt, invσt, σ2t, λ_range; outer_max_iters = outer_max_iters, inner_max_iters = inner_max_iters, tol = tol, α = α)
+        βt, β0t = coord_descent_binom(Bt, yt, μt, σ2t, λ_range; outer_max_iters = outer_max_iters, inner_max_iters = inner_max_iters, tol = tol, α = α)
+        βt, β0t = coord_descent_binom(Bt, yt, μt, σ2t, λ_range)
 
         # Evaluate mean-squared error on validation set
         Bv = B[val]
-        predv = expit.((Bv * βt) .+ β0t)
+        lin_predv = (Bv * βt) .+ β0t'
+        predv = expit.(lin_predv)
 
         yv = y[val]
-        dev[k] = -mean(yv .* log.(predv) .+ (1 .- yv) .* log.(1 .- predv), dims=1)
+        dev[k] = -mean((yv .* lin_predv) .+ log.(predv), dims=1)
     end
 
     # Compute which λ value was best over the cross-validated folds

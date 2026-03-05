@@ -15,20 +15,20 @@ using RandomHAL
 Random.seed!(1234)
 
 dgp = @dgp(
-        X1 ~ Bernoulli(0.5),
+        #X1 ~ Bernoulli(0.5),
         X2 ~ Beta(1, 1),
         X3 ~ Beta(1, 1),
-        X4 ~ Beta(1, 1),
-        X5 ~ Normal.(X2, 0.01),
-        X6 ~ Normal.(X3 .* (1 .- (2 .*X1)), 0.001),
-        X7 ~ Normal.(sin.(2*pi*X2), 0.0001),
-        X8 ~ Normal.(1 .- cos.(2*pi*X2), 0.0001),
-        X9 ~ Normal.((X3 .- 0.5) .* ((X3 .> 0.5) - (X3 .< 0.5)), 0.0),
+        #X4 ~ Beta(1, 1),
+        #X5 ~ Normal.(X2, 0.01),
+        #X6 ~ Normal.(X3 .* (1 .- (2 .*X1)), 0.001),
+        #X7 ~ Normal.(sin.(2*pi*X2), 0.0001),
+        #X8 ~ Normal.(1 .- cos.(2*pi*X2), 0.0001),
+        #X9 ~ Normal.((X3 .- 0.5) .* ((X3 .> 0.5) - (X3 .< 0.5)), 0.0),
 
-        #A ~ (@. Bernoulli(logistic(6 * X2 - 3))),
-        A ~ (@. Bernoulli(logistic((X2 + X2^2 + X3 + X3^2 + X4 + X4^2 + X2 * X3) - 2.5))),
+        A ~ (@. Bernoulli(logistic(6 * X2 - 3))),
+        #A ~ (@. Bernoulli(logistic((X2 + X2^2 + X3 + X3^2 + X4 + X4^2 + X2 * X3) - 2.5))),
         #Y ~ (@. Normal(A + X2 * X3 + A * X2 + A * X4 + 0.2 * (sqrt(10*X3*X4) + sqrt(10 * X2) + sqrt(10 * X3) + sqrt(10*X4)), 0.01))
-        Y ~ (@. Normal(sin.(2*pi * X2) + sin(2*pi*X3) + sin(2*pi*X4) .+ A, 0.1))
+        Y ~ (@. Normal(sin.(2*pi * X2), 0.1))# + sin(2*pi*X3), 0.1))# + sin(2*pi*X4) .+ A, 0.1))
     )
 scm = StructuralCausalModel(dgp, :A, :Y)
 n = 100
@@ -40,33 +40,58 @@ y = vec(responsematrix(ct))
 Xa = Tables.Columns(treatmentparents(ct))
 Xma = Tables.matrix(Xa)
 A = vec(treatmentmatrix(ct))
-true_pr = propensity(scm, ct, :A)
+true_pr = conmean(scm, ct, :A)
 
 # Test NestedMatrix functionality
 @testset "NestedMatrix" begin
-    all_ranks = reduce(hcat, map(competerank, eachcol(Xm)))
-    indicator = NestedIndicators(all_ranks, [2], Xm)
+    i = 1
+    all_ranks = reduce(hcat, map(competerank, eachcol(Xma)))
+
+    # Test the path sampler
+    @test all_ranks[path_sample(all_ranks, [1]), 1] == 1:n
+
+    # Construct nested matrix
+    indicator = NestedIndicators(all_ranks, [i], Xma)
     eye = Matrix(I, n, n)
     # NestedMatrix
     B = NestedMatrix(indicator, Xm)
 
     # Construct the "true" sort
-    perm = reverse(sortperm(Xm[:, 2]))
-    B_true = Xm[:, 2] .>= Xm[perm, 2]'
+    B_true = (Xm[:, i] .>= Xm[:, i]')
 
-    @test B_true * ones(n) == B * ones(n)
-    
-    v = randn(n)
-    @test B * v ≈ B_true * v
-    @test B * eye == B_true
+    @test B_true * ones(n) == B * ones(B.ncol)
+    @test all([col in collect(eachcol(B_true)) for col in eachcol(B * eye)])
+
+    # Now check interaction
+    j = 2
+    # Check to make sure all sampled paths are nested within each other
+    S = [i, j]
+    pa = path_sample(all_ranks, S)
+    @test all([all_ranks[pa[i-1], 1] < all_ranks[pa[i], 1] for i in 2:length(pa)])
+    @test all([all_ranks[pa[i-1], 2] < all_ranks[pa[i], 2] for i in 2:length(pa)])
+
+    indicator = NestedIndicators(all_ranks, [i, j], Xma)
+    B = NestedMatrix(indicator, Xm)
+    B_true = (Xm[:, j] .>= Xm[pa, j]') .* (Xm[:, i] .>= Xm[pa, i]')
+
+    # Are the bins constructed correct?
+    bins = indicator.bins
+    order = binary_bin_search(Xma[:, [i, j]], bins)
+    @test order == [sum(all(bins .<= row', dims = 2)) for row in eachrow(Xma[:, [i, j]])]
+    @test B_true * ones(size(B_true, 2)) == B * ones(B.ncol)
+
+    matrix_cols = collect(eachcol(B_true))
+    basis_cols = eachcol(B * Matrix(I, B.ncol, B.ncol))
+    @test all([col in matrix_cols for col in basis_cols])
 
     # NestedMatrixTranspose
     Bt = transpose(B)
+    v = rand(Bt.ncol)
     @test Bt * ones(n) ≈ transpose(B_true) * ones(n)
     @test Bt * v ≈ transpose(B_true) * v
 
     # NestedMatrixBlocks
-    S = [[2], [2, 3]]
+    S = [[i], [i, j]]
     indb = NestedIndicatorBlocks(S, Xm)
     Bb = NestedMatrixBlocks(indb, Xm)
 
@@ -77,18 +102,20 @@ true_pr = propensity(scm, ct, :A)
     @test Bb.nrow == n
     @test all(sort(Bb * ones(Bb.ncol)) .< Bb.ncol)
 
+    Bb * ones(Bb.ncol)
+
     # NestedMatrixBlocksTranspose
     Bbt = transpose(Bb)
     @test Bbt.ncol == n
     @test Bbt.nrow == Bb.ncol
     @test all(sort(Bbt * ones(Bbt.ncol)) .< Bbt.nrow)
-
 end
 
 # Test BasisMatrix functionality
 @testset "BasisMatrix" begin
     all_ranks = reduce(hcat, map(competerank, eachcol(Xm)))
     smoothness = 2
+    S = [2]
     indicator = Basis(all_ranks, [2], Xm, smoothness)
     eye = Matrix(I, n, n)
     # BasisMatrix
@@ -96,16 +123,22 @@ end
     v = ones(n)
 
     # Construct the "true" sort
-    perm = reverse(sortperm(Xm[:, 2]))
-    B_true = (Xm[:, 2] .>= Xm[perm, 2]') .* (Xm[:, 2].^smoothness .- (Xm[perm, 2].^smoothness)') ./ factorial(smoothness)    
+    pa = path_sample(all_ranks, S)
+
+    B_true = (Xm[:, 2] .>= Xm[pa, 2]') .* (Xm[:, 2].^smoothness .- (Xm[pa, 2].^smoothness)') ./ factorial(smoothness)    
     @test B_true * ones(n) ≈ B * ones(n)
+
+    v = rand(n)
+    @test B_true * v ≈ B * v
     
-    v = randn(n)
-    @test B * v ≈ B_true * v
-    @test B * eye == B_true
+    # Test if the matrices contain the same columns
+    matrix_cols = collect(eachcol(B_true))
+    basis_cols = eachcol(B * Matrix(I, B.ncol, B.ncol))
+    @test all([col in matrix_cols for col in basis_cols])
 
     # BasisMatrixTranspose
     Bt = transpose(B)
+
     @test Bt * ones(n) ≈ transpose(B_true) * ones(n)
     @test Bt * v ≈ transpose(B_true) * v
 
@@ -133,8 +166,11 @@ end
     # Set up inputs
     smoothness = 0
     ycs = (y .- mean(y)) ./ sqrt(var(y, corrected=false))
-    S = collect(combinations([1,2,3,4,10]))[2:end]
+    #S = collect(combinations([1,2,3,4,10]))[2:end]
+    S = [[1]]
+    d = size(Xm, 2)
     indb = BasisBlocks(S, Xm, smoothness)
+    #indb = subsample(indb, n)
     B = BasisMatrixBlocks(indb, Xm)
     μ = colmeans(B)
     σ2 = (squares(transpose(B)) ./ B.nrow) .- (μ.^2)
@@ -154,10 +190,10 @@ end
     BT = (transpose(B) * Matrix(I, B.nrow, B.nrow))
     @test transpose(B2) ≈ BT
 
-
+    B2
     # Run the algorithm
     λ_range = [0.1, 0.01, 0.001, 0.0001]
-    @profview_allocs path, β0 = coord_descent(B, ycs, μ, invσ, σ2, λ_range; outer_max_iters = 100, inner_max_iters = 100)
+    @time path, β0 = coord_descent(B, ycs, μ, invσ, σ2, λ_range; outer_max_iters = 1000, inner_max_iters = 1000)
     preds = B * path .+ β0
 
     # Make sure we get close to a reasonable solution
@@ -186,9 +222,10 @@ end
     S = collect(combinations([1,2,3,4]))[2:end]
     min_λ_ε = 0.001
     λ_grid_length = 100
-    smoothness = 1
+    smoothness = 0
 
-    @time model = fast_fit_cv_randomhal(S, Xm, ycs; smoothness = smoothness, K = 10, min_λ_ε = min_λ_ε, λ_grid_length = λ_grid_length) 
+    max_block_size = 100
+    @time model = fast_fit_cv_randomhal(S, Xm, ycs, max_block_size; smoothness = smoothness, K = 5, min_λ_ε = min_λ_ε, λ_grid_length = λ_grid_length) 
     
     preds = predict_randomhal(model, Xm)
     mse = mean((ycs .- preds).^2)
@@ -196,13 +233,14 @@ end
 
     # How does this compare to glmnet?
     # Instantiate full basis
-    indb = BasisBlocks(S, Xm, smoothness)
+    indb = subsample(BasisBlocks(S, Xm, smoothness), max_block_size)
     B = BasisMatrixBlocks(indb, Xm)
     B2 = (B * Matrix(I, B.ncol, B.ncol))
     
     # Set up grid so that glmnet is consistent with our method
     μ = colmeans(B)
     σ2 = (squares(transpose(B)) ./ B.nrow) .- (μ.^2)
+    σ2[σ2 .< 0.0] .= 0.0
     invσ = 1 ./ sqrt.(σ2)
     invσ[isinf.(invσ)] .= 0.0
     corrs = ((transpose(B)*ycs) .- (μ .* sum(ycs))) .* invσ
@@ -221,7 +259,7 @@ end
     # Instantiate an MLJ model with mostly default parameters
     Random.seed!(1234)
 
-    model = RandomHALRegressor(smoothness = 1)
+    model = RandomHALRegressor(smoothness = 1, max_block_size = 20)
     mach = machine(model, X, y) |> MLJBase.fit!
 
     # Make sure our predictions work well
@@ -230,18 +268,40 @@ end
     @test mse < 0.1
 end
 
-@testset "Logistic regression coordinate descent" begin
+#@testset "Logistic regression coordinate descent" begin
     smoothness = 1
-    S = collect(combinations([1,2,3]))[2:end]
+    #S = collect(combinations([1,2,3]))[2:end]
+    S = [[2,3]]
+    inds = sortperm(Xm[:, 2])
+    Xm = Xm[inds, :]
     indb = BasisBlocks(S, Xm, smoothness)
+    
+    B = BasisMatrixBlocks(subsample(BasisBlocks(S, Xm, smoothness), 20), Xm)
+    
+    indb = BasisBlocks(S, Xm, smoothness)
+    indb = subsample(indb, 20)
     B = BasisMatrixBlocks(indb, Xm)
+    B2 = (B * Matrix(I, B.ncol, B.ncol))
+
+    new_indices = sort(sample(1:length(indb.blocks[1].indicators.path), 20, replace=false))
+    
+    ind1 = indb.blocks[1].indicators
+    ind2 = NestedIndicators(indb.blocks[1].indicators.section, indb.blocks[1].indicators.bins[vcat(new_indices, length(indb.blocks[1].indicators.path) + 1), :], indb.blocks[1].indicators.path[new_indices])
+    
+    
+
+    (Xm[:, 2] .- Xm[ind2.path, 2]')
+
+    ind2
+
+
+    return Basis(indicators, basis.smoothness, basis.intercept[new_indices])
+
     μ = colmeans(B)
     σ2 = (squares(transpose(B)) ./ B.nrow) .- (μ.^2)
     σ2[σ2 .< 0.0] .= 0.0
     invσ = 1 ./ sqrt.(σ2)
     invσ[isinf.(invσ)] .= 0.0 
-
-    B2 = (B * Matrix(I, B.ncol, B.ncol))
 
     # Test the weighted variance and mean for IRLS
     w = rand(n)
@@ -263,34 +323,39 @@ end
 
     lin_preds = (B * path) .+ β0'
     preds = 1 ./ (1 .+ exp.(-lin_preds))
-    mse = [mean((preds[:, i] .- A).^2) for i in 1:size(path, 2)]
+
+    mse = [mean((preds[:, i] .- true_pr).^2) for i in 1:size(path, 2)]
 
     # How close are we to GLMNet?
     @time glmnet_fit = glmnet(B2, float.([.!(A) A]), Binomial(), lambda = λ_range)
     glmnet_preds = GLMNet.predict(glmnet_fit, B2, outtype = :prob)
-    glmnet_mse = [mean((GLMNet.predict(glmnet_fit, B2, outtype = :prob)[:, i] .- A).^2) for i in 1:length(glmnet_fit.lambda)]
+    glmnet_mse = [mean((GLMNet.predict(glmnet_fit, B2, outtype = :prob)[:, i] .- true_pr).^2) for i in 1:length(glmnet_fit.lambda)]
 
     abs_diff = abs.(glmnet_mse .- mse)
     @test all(abs_diff .< 0.01)
+
+    scatter(Xm[:, 2], true_pr)
+    scatter!(Xm[:, 2], preds[:, 2])
+    scatter!(Xm[:, 2], glmnet_preds[:, 2])
 end
 
-@testset "Cross-validated logistic regression" begin#
+#@testset "Cross-validated logistic regression" begin#
     # Set up model parameters
-    S = collect(combinations([1,2,3]))[2:end]
+    #S = collect(combinations([2,3,4]))[2:end]
+    S = [[2]]
     min_λ_ε = 0.001
     λ_grid_length = 100
     smoothness = 1
-
-    @time model = fast_fit_cv_randomhal_binom(S, Xma, Float64.(A); smoothness = smoothness, K = 10, min_λ_ε = min_λ_ε, λ_grid_length = λ_grid_length) 
+    max_block_size = 100
+    @time model = fast_fit_cv_randomhal_binom(S, Xma, Float64.(A), max_block_size; smoothness = smoothness, K = 10, min_λ_ε = min_λ_ε, λ_grid_length = λ_grid_length) 
     
     preds = predict_randomhal_binom(model, Xm)
-    dev = mean(A .* log.(preds) .+ (1 .- A) .* log.(1 .- preds))
     mse = mean((true_pr .- preds).^2)
     @test mse < 0.1
 
     # How does this compare to glmnet?
     # Instantiate full basis
-    indb = BasisBlocks(S, Xm, smoothness)
+    indb = model.indblocks
     B = BasisMatrixBlocks(indb, Xm)
     B2 = (B * Matrix(I, B.ncol, B.ncol))
     
@@ -306,14 +371,20 @@ end
     
     @time glmnet_fit = glmnetcv(B2, float.([.!(A) A]), Binomial(); lambda = λ_range)
     glmnet_preds = GLMNet.predict(glmnet_fit, B2, outtype = :prob)
-    glmnet_dev = mean(A .* log.(glmnet_preds) .+ (1 .- A) .* log.(1 .- glmnet_preds))
     glmnet_mse = mean((true_pr .- glmnet_preds).^2)
 
     @test abs(mse - glmnet_mse) < 0.1
 
-    #scatter(Xm[:, 1], true_pr)
-    #scatter!(Xm[:, 1], preds)
-    #scatter!(Xm[:, 1], glmnet_preds)
+    scatter(Xm[:, 2], true_pr)
+    scatter!(Xm[:, 2], preds)
+
+    Xm2 = zeros(10000, 10)
+    Xm2[:, 2] = collect(0.0001:0.0001:1)
+
+
+    scatter(Xm2[:, 2], predict_randomhal_binom(model, Xm2))
+
+    scatter!(Xm[:, 2], glmnet_preds)
 
 end
 
@@ -321,7 +392,7 @@ end
     # Instantiate an MLJ model with mostly default parameters
     Random.seed!(1234)
 
-    model = RandomHALClassifier(smoothness = 1)
+    model = RandomHALClassifier(smoothness = 1, max_block_size = 20)
     mach = machine(model, Xa, Float64.(A)) |> MLJBase.fit!
 
     # Make sure our predictions work well

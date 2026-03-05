@@ -3,6 +3,7 @@
 ### Continuous Data ###
 @mlj_model mutable struct RandomHALClassifier <: MMI.Probabilistic
     smoothness::Int64 = 0::(_ >= 0)
+    max_block_size::Int64 = 100::(_ > 0)
     nlambda::Int64 = 100::(_ > 0)
     nfolds::Int64 = 10::(_ > 0)
     outer_max_iters::Int64 = 1000::(_ > 0)
@@ -21,14 +22,14 @@ function MLJBase.fit(model::RandomHALClassifier, verbosity, X, y)
     sections = [[i] for i in col_indices]
 
     # Then, sample ~ 0.5 * log(n) interaction terms from each interaction order
-    for int_order in 2:round(Int, 0.5 * log(n))
-        for _ in 1:round(Int, 0.5 * log(n))
+    for int_order in 2:max(round(Int, 0.5 * log(n)), DataAPI.ncol(X))
+        for _ in 1:min(round(Int, 0.5 * log(n)), binomial(DataAPI.ncol(X), int_order))
             push!(sections, sample(col_indices, int_order, replace = false))
         end
     end
 
     Xm = Tables.matrix(X)
-    params = fast_fit_cv_randomhal_binom(sections, Xm, y; smoothness = model.smoothness,
+    params = fast_fit_cv_randomhal_binom(sections, Xm, y, model.max_block_size; smoothness = model.smoothness,
                 K = model.nfolds, outer_max_iters = model.outer_max_iters, 
                 inner_max_iters = model.inner_max_iters, λ = nothing, 
                 λ_grid_length = model.λ_grid_length, min_λ_ε = model.min_λ_ε, 

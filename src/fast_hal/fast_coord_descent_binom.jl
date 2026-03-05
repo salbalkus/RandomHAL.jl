@@ -68,7 +68,7 @@ function cycle_coord_binom!(active::BitVector, β, β_prev, X::BasisMatrixBlocks
     end
 end
 
-function coord_descent_binom(X::BasisMatrixBlocks, y::Vector, μ::Vector{Float64}, σ2::Vector{Float64}, λ_range::Vector{Float64}; newton_max_iters::Int64 = 100, outer_max_iters::Int64 = 1000, inner_max_iters::Int64 = 1000, tol::Float64 = 1e-7, α::Float64 = 1.0)
+function coord_descent_binom(X::BasisMatrixBlocks, y::Vector, μ::Vector{Float64}, σ2::Vector{Float64}, λ_range::Vector{Float64}; newton_max_iters::Int64 = 25, outer_max_iters::Int64 = 100, inner_max_iters::Int64 = 100, tol::Float64 = 1e-7, α::Float64 = 1.0)
 
     # Check input
     n = X.nrow
@@ -103,6 +103,10 @@ function coord_descent_binom(X::BasisMatrixBlocks, y::Vector, μ::Vector{Float64
     β0_prev = 0
     lin_preds = zeros(n)
 
+    # Initialize active set and iteration counter
+    active = trues(d)
+    next_active = copy(active)  
+
     for (λ_index, λ) in enumerate(λ_range)
 
         # Compute penalties
@@ -114,11 +118,7 @@ function coord_descent_binom(X::BasisMatrixBlocks, y::Vector, μ::Vector{Float64
         # Otherwise, update the active set and repeat 
 
         newton_iteration = 1
-        while (newton_iteration < newton_max_iters)
-
-            # Initialize active set and iteration counter
-            active = trues(d)
-            next_active = copy(active)   
+        while (newton_iteration < newton_max_iters) 
 
             # Begin iterative descent
             outer_iteration = 1
