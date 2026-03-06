@@ -158,7 +158,7 @@ end
     @test Bb.nrow == n
     @test all(sort(Bb * ones(Bb.ncol)) .< Bb.ncol)
 
-    # NestedMatrixBlocksTranspose
+    # BasisMatrixBlocksTranspose
     Bbt = transpose(Bb)
     @test Bbt.ncol == n
     @test Bbt.nrow == Bb.ncol
@@ -235,7 +235,7 @@ end
     smoothness = 0
 
     max_block_size = 100
-    @time model = fast_fit_cv_randomhal(S, Xm, ycs, max_block_size; smoothness = smoothness, K = 5, min_λ_ε = min_λ_ε, λ_grid_length = λ_grid_length) 
+    @time model, test_mse = fast_fit_cv_randomhal(S, Xm, ycs, max_block_size; smoothness = smoothness, K = 10, min_λ_ε = min_λ_ε, λ_grid_length = λ_grid_length) 
     
     preds = predict_randomhal(model, Xm)
     mse = mean((ycs .- preds).^2)
@@ -263,6 +263,11 @@ end
     glmnet_mse = mean((ycs .- glmnet_preds).^2)
 
     @test abs(mse - glmnet_mse) < 0.1
+
+    x = Xm[:, 1]
+    scatter(x, ycs)
+    scatter!(x, preds)
+    scatter!(x, glmnet_preds)
 end
 
 @testset "MLJ Interface" begin

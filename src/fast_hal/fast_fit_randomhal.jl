@@ -18,6 +18,9 @@ function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}
     n = length(y_cs)
 
     # Construct the indicators to produce a basis
+    # TODO: Could change this to just take a vector of integers as a subset
+    # That way users can sample after the full basis has been constructed,
+    # i.e. based on number of entries.
     indblocks = subsample(BasisBlocks(sections, X, smoothness), max_block_size)
 
     # Construct the basis and variance estimates for the training data
@@ -55,11 +58,11 @@ function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}
         train = reduce(vcat, folds[Not(k)])
         val = folds[k]
 
-        Bt = B[train]
+        Bt = BasisMatrixBlocks(indblocks, X[train, :])
         yt = y_cs[train]
 
         # Compute variables to center and scale each training column implicitly in the coordinate descent algorithm
-        μt = (transpose(Bt) * ones(Bt.nrow)) ./ Bt.nrow
+        μt = colmeans(Bt)
         σ2t = (squares(transpose(Bt)) ./ Bt.nrow) .- (μt.^2)
         σ2t[σ2t .< 0.0] .= 0.0 # Handle numerical issues with negative variance estimates
         invσt = 1 ./ sqrt.(σ2t)
@@ -68,8 +71,8 @@ function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}
         βt, β0t = coord_descent(Bt, yt, μt, invσt, σ2t, λ_range; outer_max_iters = outer_max_iters, inner_max_iters = inner_max_iters, tol = tol, α = α)
 
         # Evaluate mean-squared error on validation set
-        Bv = B[val]
-        predv = (Bv * βt) .+ β0t'
+        Bv = BasisMatrixBlocks(indblocks, X[val, :])
+        predv = (Bv * βt) .+ β0t
 
         yv = y_cs[val]
         mse[k] = mean((yv .- predv).^2, dims=1)
@@ -86,7 +89,7 @@ function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}
     # Add mean of y to the intercept
     β0_final = (β0[best_index]* σ_y) + μ_y
 
-    return RandomHALParameters(indblocks, vec(β_final), β0_final, λ_range[best_index])
+    return RandomHALParameters(indblocks, vec(β_final), β0_final, λ_range[best_index]), test_mse
 end
 
 function predict_randomhal(model::RandomHALParameters, X::AbstractMatrix)

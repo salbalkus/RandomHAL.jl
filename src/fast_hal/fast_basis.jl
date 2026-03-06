@@ -150,12 +150,14 @@ end
 # Matrix-free multiplication #
 
 # Take inner product of a vector of observations with each indicator basis
-# TODO: Might be able to restructure this to eke out a little more performance
+# TODO: THERE IS AN ERROR. THIS FAILS WHEN MATRIX IS A SUBSET
+# The issue is that some columns get zeroed out because of the "<= B.ncol" condition
+# How to fix?
 function mul(B::NestedMatrixTranspose, v::AbstractVector) # assumes B and v are compatible
     out = zeros(B.nrow)
     # Get sum within each bin
     for i in 1:B.ncol
-        if (B.order[i] <= B.ncol) && (B.order[i] > 0) # If the observation is in a bin, add its value to the sum for that bin
+        if (B.order[i] > 0) # If the observation is in a bin, add its value to the sum for that bin
             out[B.nrow - B.order[i] + 1] += v[i]
         end
     end
