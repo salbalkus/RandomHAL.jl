@@ -174,8 +174,8 @@ end
     S = [[1]]
     d = size(Xm, 2)
     indb = BasisBlocks(S, Xm, smoothness)
-    #indb = subsample(indb, n)
     B = BasisMatrixBlocks(indb, Xm)
+
     μ = colmeans(B)
     σ2 = (squares(transpose(B)) ./ B.nrow) .- (μ.^2)
     σ2[σ2 .< 0.0] .= 0.0
@@ -216,10 +216,10 @@ end
     abs_diff = abs.(glmnet_mse .- mse)
     @test all(abs_diff .< 0.001)
 
-    #x = Xm[:, 1]
-    #scatter(x, ycs)
-    #scatter!(x, preds[:, 3])
-    #scatter!(x, glmnet_preds[:, 3])
+    x = Xm[:, 1]
+    scatter(x, ycs)
+    scatter!(x, preds[:, 3])
+    scatter!(x, glmnet_preds[:, 3])
 
 end
 

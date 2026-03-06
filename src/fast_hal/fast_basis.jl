@@ -272,7 +272,7 @@ function subsample(basis::Basis, max_block_size::Int)
     if max_block_size < length(basis.indicators.path)
         new_indices = sort(sample(1:length(basis.indicators.path), max_block_size, replace=false))
         indicators = NestedIndicators(basis.indicators.section, basis.indicators.bins[vcat(new_indices, length(basis.indicators.path) + 1), :], basis.indicators.path[new_indices])
-        return Basis(indicators, basis.smoothness, basis.intercept[new_indices])
+        return Basis(indicators, basis.smoothness, basis.intercept[reverse(B1.ncol .- new_indices .+ 1)])
     else
         # Otherwise, if we are asked to sample more than the number of bins in the path, just return the original object
         return basis
