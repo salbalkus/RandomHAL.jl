@@ -1,7 +1,7 @@
 # This function currently produces a lot of allocations. 
 # May be able to reduce these with clever programming tricks
 
-function update_coefficients_binom!(indices, active::BitVector, β, β_unp, β_prev, l_sum, l_squares, r_shift, hessian_bound, nz_sum, μ, invσ, lasso_penalty::Float64, cur_ind::Int64, n)
+function update_coefficients_binom!(indices, active::BitVector, β, β_unp, β_prev, l_sum, l_squares, r_shift, hessian_bound, nz_sum, μ, invσ, lasso_penalty::Float64, ridge_penalty::Float64, cur_ind::Int64, n)
     
     # These variables help track the sequential change in residuals
     # for fast O(n) computation
@@ -23,7 +23,7 @@ function update_coefficients_binom!(indices, active::BitVector, β, β_unp, β_p
             Δ = invσ[k]*(ΔA - ΔB)
 
             # Apply the lasso thresholding
-            β[k] = soft_threshold(β_unp[k - cur_ind + 1] - Δ, lasso_penalty) / hessian_bound
+            β[k] = soft_threshold(β_unp[k - cur_ind + 1] - Δ, lasso_penalty) / (hessian_bound + ridge_penalty)
 
             # Compute components needed to update the next β_unp
             # that involve the kth entries of vectors
@@ -42,7 +42,7 @@ end
 function cycle_coord_binom!(active::BitVector, β, β_prev, X::BasisMatrixBlocks, 
                       hessian_bound, z, lin_preds,
                       l_sum, l_squares, r_shift, nz_sum, μ, invσ,
-                      lasso_penalty::Float64)    
+                      lasso_penalty::Float64, ridge_penalty::Float64)    
 
     # Iterate through each block of the basis
     cur_ind  = 1
@@ -56,7 +56,7 @@ function cycle_coord_binom!(active::BitVector, β, β_prev, X::BasisMatrixBlocks
         β_unp = hessian_bound .* (view(β, indices) .+ (((transpose(XB) * res) .- (view(μ, indices).*sum(res))) .* view(invσ, indices)) ./ X.nrow)
 
         # Update coefficients sequentially
-        update_coefficients_binom!(indices, active, β, β_unp, β_prev, l_sum, l_squares, r_shift, hessian_bound, nz_sum, μ, invσ, lasso_penalty, cur_ind, X.nrow)
+        update_coefficients_binom!(indices, active, β, β_unp, β_prev, l_sum, l_squares, r_shift, hessian_bound, nz_sum, μ, invσ, lasso_penalty, ridge_penalty, cur_ind, X.nrow)
 
         # Update residuals in-place to avoid excessive allocations
         dif = (view(β, indices)  - view(β_prev, indices)) .* view(invσ, indices)
@@ -68,17 +68,12 @@ function cycle_coord_binom!(active::BitVector, β, β_prev, X::BasisMatrixBlocks
     end
 end
 
-function coord_descent_binom(X::BasisMatrixBlocks, y::Vector, μ::Vector{Float64}, σ2::Vector{Float64}, λ_range::Vector{Float64}; newton_max_iters::Int64 = 25, outer_max_iters::Int64 = 100, inner_max_iters::Int64 = 100, tol::Float64 = 1e-7, α::Float64 = 1.0)
+function coord_descent_binom(X::BasisMatrixBlocks, y::Vector, μ::Vector{Float64}, invσ, σ2::Vector{Float64}, λ_range::Vector{Float64}; newton_max_iters::Int64 = 25, outer_max_iters::Int64 = 100, inner_max_iters::Int64 = 100, tol::Float64 = 1e-7, α::Float64 = 1.0)
 
     # Check input
     n = X.nrow
     d = X.ncol
     n == length(y) || error("Number of rows in X must match length of y")
-
-    # Compute inverse standard deviation for scaling
-    σ2[σ2 .< 0.0] .= 0.0
-    invσ = 1 ./ sqrt.(σ2) # This is right
-    invσ[isinf.(invσ)] .= 0.0  # Handle zero-variance basis functions
 
     # Initialize probability, weights, and working response for Newton descent
     # We use the Hessian bound of 0.25 suggested in Friedman et al. 2010 to avoid divergence issues with the true IRLS weights.
@@ -111,6 +106,8 @@ function coord_descent_binom(X::BasisMatrixBlocks, y::Vector, μ::Vector{Float64
 
         # Compute penalties
         lasso_penalty = λ*α
+        ridge_penalty = λ*(1 - α)
+
 
         # First, cycle through all variables to determine the active set
         # Then, iterate on the active set until convergence
@@ -131,7 +128,7 @@ function coord_descent_binom(X::BasisMatrixBlocks, y::Vector, μ::Vector{Float64
                 while (inner_iteration < inner_max_iters) && (norm_next > tol)
                     β0_next = mean(z .- lin_preds .+ β0_next)
                     lin_preds .+= β0_next .- β0_prev
-                    cycle_coord_binom!(active, β_next, β_prev, X, hessian_bound, z, lin_preds, l_sum, l_squares, r_shift, nz_sum, μ, invσ, lasso_penalty)
+                    cycle_coord_binom!(active, β_next, β_prev, X, hessian_bound, z, lin_preds, l_sum, l_squares, r_shift, nz_sum, μ, invσ, lasso_penalty, ridge_penalty)
 
                     # Track convergence
                     norm_next = conv_crit(β_prev, β_next, σ2)
@@ -143,7 +140,7 @@ function coord_descent_binom(X::BasisMatrixBlocks, y::Vector, μ::Vector{Float64
                 # One more cycle over all variables to assess if active set changes
                 β0_next = mean(z .- lin_preds .+ β0_next)
                 lin_preds .+= β0_next .- β0_prev
-                cycle_coord_binom!(trues(d), β_next, β_prev, X, hessian_bound, z, lin_preds, l_sum, l_squares, r_shift, nz_sum, μ, invσ, lasso_penalty)
+                cycle_coord_binom!(trues(d), β_next, β_prev, X, hessian_bound, z, lin_preds, l_sum, l_squares, r_shift, nz_sum, μ, invσ, lasso_penalty, ridge_penalty)
                 next_active .= β_next .!= 0
                 β_prev .= β_next
                 β0_prev = β0_next
@@ -184,5 +181,5 @@ function coord_descent_binom(X::BasisMatrixBlocks, y::Vector, μ::Vector{Float64
     # Construct intercept and scale coefficients back to original scale
     scaled_path = (β .* invσ)
     β0 .-= vec(reshape(μ, 1, d) * scaled_path)
-    return scaled_path, β0
+    return scaled_path, reshape(β0, 1, length(λ_range))
 end

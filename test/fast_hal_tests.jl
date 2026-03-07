@@ -194,7 +194,6 @@ end
     BT = (transpose(B) * Matrix(I, B.nrow, B.nrow))
     @test transpose(B2) ≈ BT
 
-    B2
     # Run the algorithm
     λ_range = [0.1, 0.01, 0.001, 0.0001]
     @time path, β0 = coord_descent(B, ycs, μ, invσ, σ2, λ_range; outer_max_iters = 1000, inner_max_iters = 1000)
@@ -216,14 +215,14 @@ end
     abs_diff = abs.(glmnet_mse .- mse)
     @test all(abs_diff .< 0.001)
 
+    using Plots
     x = Xm[:, 1]
     scatter(x, ycs)
     scatter!(x, preds[:, 3])
     scatter!(x, glmnet_preds[:, 3])
-
 end
 
-#@testset "Cross-validated model" begin
+@testset "Cross-validated model" begin
     # Make sure to center y to make comparison with GLMNet feasible
     ycs = (y .- mean(y)) ./ sqrt(var(y, corrected=false))
 
@@ -231,11 +230,11 @@ end
     #S = collect(combinations([1,2,3,4]))[2:end]
     S = [[1]]
     min_λ_ε = 0.001
-    λ_grid_length = 100
+    n_λ = 100
     smoothness = 0
 
     max_block_size = 100
-    @time model, test_mse = fast_fit_cv_randomhal(S, Xm, ycs, max_block_size; smoothness = smoothness, K = 10, min_λ_ε = min_λ_ε, λ_grid_length = λ_grid_length) 
+    @time model = fast_fit_cv_randomhal(S, Xm, ycs; max_block_size = max_block_size, smoothness = smoothness, K = 10, min_λ_ε = min_λ_ε, n_λ = n_λ) 
     
     preds = predict_randomhal(model, Xm)
     mse = mean((ycs .- preds).^2)
@@ -262,8 +261,8 @@ end
     glmnet_preds = GLMNet.predict(glmnet_fit, B2)
     glmnet_mse = mean((ycs .- glmnet_preds).^2)
 
-    @test abs(mse - glmnet_mse) < 0.1
-
+    @test abs(mse - glmnet_mse) < 0.01
+    
     x = Xm[:, 1]
     scatter(x, ycs)
     scatter!(x, preds)
@@ -283,12 +282,10 @@ end
     @test mse < 0.1
 end
 
-#@testset "Logistic regression coordinate descent" begin
+@testset "Logistic regression coordinate descent" begin
     smoothness = 1
     #S = collect(combinations([1,2,3]))[2:end]
-    S = [[2,3]]
-    inds = sortperm(Xm[:, 2])
-    Xm = Xm[inds, :]
+    S = [[1]]
     indb = BasisBlocks(S, Xm, smoothness)
     
     B = BasisMatrixBlocks(subsample(BasisBlocks(S, Xm, smoothness), 20), Xm)
@@ -297,20 +294,6 @@ end
     indb = subsample(indb, 20)
     B = BasisMatrixBlocks(indb, Xm)
     B2 = (B * Matrix(I, B.ncol, B.ncol))
-
-    new_indices = sort(sample(1:length(indb.blocks[1].indicators.path), 20, replace=false))
-    
-    ind1 = indb.blocks[1].indicators
-    ind2 = NestedIndicators(indb.blocks[1].indicators.section, indb.blocks[1].indicators.bins[vcat(new_indices, length(indb.blocks[1].indicators.path) + 1), :], indb.blocks[1].indicators.path[new_indices])
-    
-    
-
-    (Xm[:, 2] .- Xm[ind2.path, 2]')
-
-    ind2
-
-
-    return Basis(indicators, basis.smoothness, basis.intercept[new_indices])
 
     μ = colmeans(B)
     σ2 = (squares(transpose(B)) ./ B.nrow) .- (μ.^2)
@@ -334,7 +317,7 @@ end
     @test vec(sum(0.25 .* (B2.^2), dims=1)) ≈ squares(transpose(B)) .* 0.25
 
     λ_range = [0.1, 0.05, 0.01, 0.001]
-    @time path, β0 = coord_descent_binom(B, A, μ, σ2, λ_range)
+    @time path, β0 = coord_descent_binom(B, A, μ, invσ, σ2, λ_range)
 
     lin_preds = (B * path) .+ β0'
     preds = 1 ./ (1 .+ exp.(-lin_preds))
@@ -349,22 +332,22 @@ end
     abs_diff = abs.(glmnet_mse .- mse)
     @test all(abs_diff .< 0.01)
 
-    scatter(Xm[:, 2], true_pr)
-    scatter!(Xm[:, 2], preds[:, 2])
-    scatter!(Xm[:, 2], glmnet_preds[:, 2])
+    scatter(Xm[:, 1], true_pr)
+    scatter!(Xm[:, 1], preds[:, 3])
+    scatter!(Xm[:, 1], glmnet_preds[:, 3])
 end
 
-#@testset "Cross-validated logistic regression" begin#
+@testset "Cross-validated logistic regression" begin#
     # Set up model parameters
     #S = collect(combinations([2,3,4]))[2:end]
-    S = [[2]]
+    S = [[1]]
     min_λ_ε = 0.001
-    λ_grid_length = 100
+    n_λ = 100
     smoothness = 1
     max_block_size = 100
-    @time model = fast_fit_cv_randomhal_binom(S, Xma, Float64.(A), max_block_size; smoothness = smoothness, K = 10, min_λ_ε = min_λ_ε, λ_grid_length = λ_grid_length) 
+    @time model = fast_fit_cv_randomhal(S, Xma, Float64.(A); family = Binomial(), max_block_size = max_block_size, smoothness = smoothness, K = 10, min_λ_ε = min_λ_ε, n_λ = n_λ) 
     
-    preds = predict_randomhal_binom(model, Xm)
+    preds = predict_randomhal(model, Xm)
     mse = mean((true_pr .- preds).^2)
     @test mse < 0.1
 
@@ -377,12 +360,13 @@ end
     # Set up grid so that glmnet is consistent with our method
     μ = colmeans(B)
     σ2 = (squares(transpose(B)) ./ B.nrow) .- (μ.^2)
+    σ2[σ2 .< 0.0] .= 0.0
     invσ = 1 ./ sqrt.(σ2)
     invσ[isinf.(invσ)] .= 0.0
     corrs = ((transpose(B)*A) .- (μ .* sum(A))) .* invσ
     λ_max = maximum(abs.(corrs)) / n
     λ_min = min_λ_ε * λ_max    
-    λ_range = reverse(exp.(range(log(λ_min), log(λ_max), length = λ_grid_length)))
+    λ_range = reverse(exp.(range(log(λ_min), log(λ_max), length = n_λ)))
     
     @time glmnet_fit = glmnetcv(B2, float.([.!(A) A]), Binomial(); lambda = λ_range)
     glmnet_preds = GLMNet.predict(glmnet_fit, B2, outtype = :prob)
@@ -390,16 +374,10 @@ end
 
     @test abs(mse - glmnet_mse) < 0.1
 
-    scatter(Xm[:, 2], true_pr)
-    scatter!(Xm[:, 2], preds)
-
-    Xm2 = zeros(10000, 10)
-    Xm2[:, 2] = collect(0.0001:0.0001:1)
-
-
-    scatter(Xm2[:, 2], predict_randomhal_binom(model, Xm2))
-
-    scatter!(Xm[:, 2], glmnet_preds)
+    using Plots
+    scatter(Xm[:, 1], true_pr)
+    scatter!(Xm[:, 1], preds)
+    scatter!(Xm[:, 1], glmnet_preds, color = "black")
 
 end
 

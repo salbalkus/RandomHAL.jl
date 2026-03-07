@@ -28,10 +28,11 @@ function MLJBase.fit(model::RandomHALRegressor, verbosity, X, y)
     end
 
     Xm = Tables.matrix(X)
-    params = fast_fit_cv_randomhal(sections, Xm, y, model.max_block_size; smoothness = model.smoothness,
+    params = fast_fit_cv_randomhal(sections, Xm, y; 
+                max_block_size = model.max_block_size, smoothness = model.smoothness,
                 K = model.nfolds, outer_max_iters = model.outer_max_iters, 
-                inner_max_iters = model.inner_max_iters, λ = nothing, 
-                λ_grid_length = model.nlambda, min_λ_ε = model.min_λ_ε, 
+                inner_max_iters = model.inner_max_iters, 
+                n_λ = model.nlambda, min_λ_ε = model.min_λ_ε, 
                 tol = model.tol, α = model.α)
     
     fitresult = (params = params,)

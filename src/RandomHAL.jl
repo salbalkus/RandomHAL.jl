@@ -46,6 +46,7 @@ module RandomHAL
 
     # New fast basis stuff
     include("fast_hal/fast_basis.jl")
+    export AbstractNestedMatrix
     export path_sample, binary_bin_search
     export NestedIndicators, NestedIndicatorBlocks, NestedMatrix, NestedMatrixBlocks 
     export Basis, BasisBlocks, BasisMatrix, BasisMatrixBlocks
@@ -62,8 +63,8 @@ module RandomHAL
     include("fast_hal/fast_fit_randomhal.jl")
     export fast_fit_cv_randomhal, predict_randomhal
 
-    include("fast_hal/fast_fit_randomhal_binom.jl")
-    export fast_fit_cv_randomhal_binom, predict_randomhal_binom
+    #include("fast_hal/fast_fit_randomhal_binom.jl")
+    #export fast_fit_cv_randomhal_binom, predict_randomhal_binom
 
     include("fast_hal/fast_hal_mlj_interface.jl")
     export RandomHALRegressor

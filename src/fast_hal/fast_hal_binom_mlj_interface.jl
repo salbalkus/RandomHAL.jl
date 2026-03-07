@@ -6,9 +6,10 @@
     max_block_size::Int64 = 100::(_ > 0)
     nlambda::Int64 = 100::(_ > 0)
     nfolds::Int64 = 10::(_ > 0)
+    newton_max_iters::Int64 = 25::(_ > 0)
     outer_max_iters::Int64 = 1000::(_ > 0)
     inner_max_iters::Int64 = 1000::(_ > 0)
-    λ_grid_length::Int64 = 100::(_ > 0)
+    n_λ::Int64 = 100::(_ > 0)
     min_λ_ε::Float64 = 1e-3::(_ > 0 && _ < 1.0)
     tol::Float64 = 1e-7::(_ > 0)
     α::Float64 = 1.0::(_ >= 0.0 && _ <= 1.0)
@@ -29,10 +30,13 @@ function MLJBase.fit(model::RandomHALClassifier, verbosity, X, y)
     end
 
     Xm = Tables.matrix(X)
-    params = fast_fit_cv_randomhal_binom(sections, Xm, y, model.max_block_size; smoothness = model.smoothness,
-                K = model.nfolds, outer_max_iters = model.outer_max_iters, 
+    params = fast_fit_cv_randomhal(sections, Xm, y; 
+                family = Binomial(), K = model.nfolds, 
+                max_block_size = model.max_block_size, smoothness = model.smoothness,
+                newton_max_iters = model.newton_max_iters,
+                outer_max_iters = model.outer_max_iters, 
                 inner_max_iters = model.inner_max_iters, λ = nothing, 
-                λ_grid_length = model.λ_grid_length, min_λ_ε = model.min_λ_ε, 
+                n_λ = model.n_λ, min_λ_ε = model.min_λ_ε, 
                 tol = model.tol, α = model.α)
     
     fitresult = (params = params,)
@@ -41,4 +45,4 @@ function MLJBase.fit(model::RandomHALClassifier, verbosity, X, y)
     return fitresult, cache, report
 end
 
-MLJBase.predict(model::RandomHALClassifier, fitresult, Xnew) = predict_randomhal_binom(fitresult.params, Tables.matrix(Xnew))
+MLJBase.predict(model::RandomHALClassifier, fitresult, Xnew) = predict_randomhal(fitresult.params, Tables.matrix(Xnew))

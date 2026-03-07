@@ -28,7 +28,7 @@ function update_coefficients!(indices, active::BitVector, β, β_unp, β_prev, l
             Δ = invσ[k]*(ΔA - ΔB)
 
             # Apply the lasso thresholding
-            β[k] = soft_threshold(β_unp[k - cur_ind + 1] - Δ, lasso_penalty) / ridge_penalty
+            β[k] = soft_threshold(β_unp[k - cur_ind + 1] - Δ, lasso_penalty) / (1 + ridge_penalty)
 
             # Compute components needed to update the next β_unp
             # that involve the kth entries of vectors
@@ -91,7 +91,7 @@ function coord_descent(X::BasisMatrixBlocks, y::Vector{Float64}, μ::Vector{Floa
     for (λ_index, λ) in enumerate(λ_range)
         # Compute penalties
         lasso_penalty = λ*α
-        ridge_penalty = 1 - (1 - α)*λ
+        ridge_penalty = λ*(1 - α)
 
         # First, cycle through all variables to determine the active set
         # Then, iterate on the active set until convergence
