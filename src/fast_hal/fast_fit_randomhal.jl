@@ -37,6 +37,9 @@ mutable struct RandomHALParameters{T <:Distribution}
     β0::Float64
     best_λ::Float64
     family::T
+    β_path::AbstractMatrix{Float64}
+    β0_path::AbstractMatrix{Float64}
+    λ::Vector{Float64}
 end
 
 function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}, X::AbstractMatrix, y::AbstractVector{Float64}; 
@@ -126,10 +129,10 @@ function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}
     if isa(family, Normal)
         # Rescale the fitted coefficients to be on the original scale of y and add mean of y
         RandomHALParameters(indblocks, vec(β[:, best_index] .* σ_y), (β0[best_index]* σ_y) + μ_y, 
-                            λ_range[best_index], family)
+                            λ_range[best_index], family, β, β0, λ_range)
     else
         RandomHALParameters(indblocks, vec(β[:, best_index]), β0[best_index], 
-                            λ_range[best_index], family)
+                            λ_range[best_index], family, β, β0, λ_range)
     end
 end
 

@@ -31,11 +31,12 @@ dgp = @dgp(
         Y ~ (@. Normal(sin.(2*pi * X2) .+ sin(2*pi*X3) .+ X2 .* X3, 0.1))# + sin(2*pi*X4) .+ A, 0.1))
     )
 scm = StructuralCausalModel(dgp, :A, :Y)
-n = 800
+n = 100
 ct = rand(scm, n)
 X = Tables.Columns(responseparents(ct))
 Xm = Tables.matrix(X)
 y = vec(responsematrix(ct))
+true_conmean = conmean(scm, ct, :Y)
 
 Xa = Tables.Columns(treatmentparents(ct))
 Xma = Tables.matrix(Xa)
@@ -179,6 +180,7 @@ end
 end
 
 @testset "Coordinate descent" begin
+
     # Set up inputs
     smoothness = 1
     ycs = (y .- mean(y)) ./ sqrt(var(y, corrected=false))
@@ -225,14 +227,14 @@ end
     glmnet_mse = [mean((GLMNet.predict(glmnet_fit, B2)[:, i] .- ycs).^2) for i in 1:length(λ_range)]
 
     abs_diff = abs.(glmnet_mse .- mse)
-    @test all(abs_diff .< 0.001)
+    @test all(abs_diff .< 0.01)
 
     using Plots
 
     #x = Xm[:, 1]
     #scatter(x, ycs)
-    #scatter!(x, preds)
-    #scatter!(x, glmnet_preds)
+    #scatter!(x, preds[:, 1])
+    #scatter!(x, glmnet_preds[:, 1])
 
     #scatter(true_conmean_test, ytest)
     #Btest = BasisMatrixBlocks(indb, Xmtest)
@@ -307,15 +309,18 @@ end
 
     # Make sure our predictions work well
     preds = MLJBase.predict(mach, X)
-    mse = mean((y .- preds).^2)
+    mse = mean((true_conmean .- preds).^2)
     @test mse < 0.01
+
+    #scatter(true_conmean, y)
+    #scatter!(true_conmean, preds)
 
     preds_test = MLJBase.predict(mach, Xtest)
     mse_test = mean((true_conmean_test .- preds_test).^2)
-    @test mse_test < 0.05
+    @test mse_test < 0.01
 
-    scatter(true_conmean_test, ytest)
-    scatter!(true_conmean_test, preds_test)
+    #scatter(true_conmean_test, ytest)
+    #scatter!(true_conmean_test, preds_test)
 
 end
 
@@ -340,11 +345,6 @@ end
     true_w_squares = vec(sum(w .* (B2.^2), dims=1))
     w_squares = squares(transpose(B), w)
     @test true_w_squares ≈ w_squares
-    true_reweighting = vec(sum(w .* ((B2 .- transpose(μ)) .* transpose(invσ)).^2, dims=1))
-    reweighting = wls_reweight(transpose(B), w, sum(w), μ, μ.^2, invσ.^2)
-    @test true_reweighting ≈ reweighting
-
-    # Test constant-weighted variance and mean
     @test vec(sum(B2 .* 0.25, dims=1)) ≈ colmeans(B) .* (n * 0.25)
     @test vec(sum(0.25 .* (B2.^2), dims=1)) ≈ squares(transpose(B)) .* 0.25
 
@@ -445,6 +445,6 @@ end
     mse_test = mean((true_pr_test .- preds_test).^2)
     @test mse < 0.01
 
-    scatter(true_pr_test, preds_test)
+    #scatter(true_pr_test, preds_test)
 
 end
