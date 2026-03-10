@@ -25,13 +25,13 @@ dgp = @dgp(
         #X8 ~ Normal.(1 .- cos.(2*pi*X2), 0.0001),
         #X9 ~ Normal.((X3 .- 0.5) .* ((X3 .> 0.5) - (X3 .< 0.5)), 0.0),
 
-        A ~ (@. Bernoulli(logistic(6 * X2 - 3))),
-        #A ~ (@. Bernoulli(logistic((X2 + X2^2 + X3 + X3^2 + X4 + X4^2 + X2 * X3) - 2.5))),
+        #A ~ (@. Bernoulli(logistic(6 * X2 - 3))),
+        A ~ (@. Bernoulli(logistic((X2 + X2^2 + X3 + X3^2 + X2 * X3) - 2.5))),
         #Y ~ (@. Normal(A + X2 * X3 + A * X2 + A * X4 + 0.2 * (sqrt(10*X3*X4) + sqrt(10 * X2) + sqrt(10 * X3) + sqrt(10*X4)), 0.01))
-        Y ~ (@. Normal(sin.(2*pi * X2), 0.1))# + sin(2*pi*X3), 0.1))# + sin(2*pi*X4) .+ A, 0.1))
+        Y ~ (@. Normal(sin.(2*pi * X2) .+ sin(2*pi*X3) .+ X2 .* X3, 0.1))# + sin(2*pi*X4) .+ A, 0.1))
     )
 scm = StructuralCausalModel(dgp, :A, :Y)
-n = 100
+n = 800
 ct = rand(scm, n)
 X = Tables.Columns(responseparents(ct))
 Xm = Tables.matrix(X)
@@ -41,6 +41,18 @@ Xa = Tables.Columns(treatmentparents(ct))
 Xma = Tables.matrix(Xa)
 A = vec(treatmentmatrix(ct))
 true_pr = conmean(scm, ct, :A)
+
+cttest = rand(scm, n)
+Xtest = Tables.Columns(responseparents(cttest))
+Xmtest = Tables.matrix(Xtest)
+ytest = vec(responsematrix(cttest))
+
+Xatest = Tables.Columns(treatmentparents(cttest))
+Xmatest = Tables.matrix(Xatest)
+Atest = vec(treatmentmatrix(cttest))
+true_pr_test = conmean(scm, cttest, :A)
+true_conmean_test = conmean(scm, cttest, :Y)
+
 
 # Test NestedMatrix functionality
 @testset "NestedMatrix" begin
@@ -171,7 +183,7 @@ end
     smoothness = 1
     ycs = (y .- mean(y)) ./ sqrt(var(y, corrected=false))
     #S = collect(combinations([1,2,3,4,10]))[2:end]
-    S = [[1]]
+    S = [[1], [2], [1,2]]
     d = size(Xm, 2)
     indb = BasisBlocks(S, Xm, smoothness)
     B = BasisMatrixBlocks(indb, Xm)
@@ -216,10 +228,18 @@ end
     @test all(abs_diff .< 0.001)
 
     using Plots
-    x = Xm[:, 1]
-    scatter(x, ycs)
-    scatter!(x, preds[:, 3])
-    scatter!(x, glmnet_preds[:, 3])
+
+    #x = Xm[:, 1]
+    #scatter(x, ycs)
+    #scatter!(x, preds)
+    #scatter!(x, glmnet_preds)
+
+    #scatter(true_conmean_test, ytest)
+    #Btest = BasisMatrixBlocks(indb, Xmtest)
+    #B2test = Btest * Matrix(I, B.ncol, B.ncol)
+    #preds_test = Btest * path .+ β0
+    #scatter!(true_conmean_test, preds_test[:, 3])
+    #scatter!(true_conmean_test, GLMNet.predict(glmnet_fit, B2test)[:, 3])
 end
 
 @testset "Cross-validated model" begin
@@ -228,12 +248,12 @@ end
 
     # Set up model parameters
     #S = collect(combinations([1,2,3,4]))[2:end]
-    S = [[1]]
+    S = [[1], [2], [2,3]]
     min_λ_ε = 0.001
     n_λ = 100
-    smoothness = 0
+    smoothness = 1
 
-    max_block_size = 100
+    max_block_size = n ÷ 4
     @time model = fast_fit_cv_randomhal(S, Xm, ycs; max_block_size = max_block_size, smoothness = smoothness, K = 10, min_λ_ε = min_λ_ε, n_λ = n_λ) 
     
     preds = predict_randomhal(model, Xm)
@@ -255,43 +275,55 @@ end
     corrs = ((transpose(B)*ycs) .- (μ .* sum(ycs))) .* invσ
     λ_max = maximum(abs.(corrs)) / n
     λ_min = min_λ_ε * λ_max    
-    λ_range = reverse(exp.(range(log(λ_min), log(λ_max), length = λ_grid_length)))
+    λ_range = reverse(exp.(range(log(λ_min), log(λ_max), length = n_λ)))
     
     @time glmnet_fit = glmnetcv(B2, ycs; lambda = λ_range)
     glmnet_preds = GLMNet.predict(glmnet_fit, B2)
     glmnet_mse = mean((ycs .- glmnet_preds).^2)
 
     @test abs(mse - glmnet_mse) < 0.01
+    @test abs(model.best_λ - glmnet_fit.lambda[argmin(glmnet_fit.meanloss)]) .< 0.01
     
-    x = Xm[:, 1]
-    scatter(x, ycs)
-    scatter!(x, preds)
-    scatter!(x, glmnet_preds)
+    #x = Xm[:, 1]
+    #scatter(x, ycs)
+    #scatter!(x, preds)
+    #scatter!(x, glmnet_preds)
+
+    #scatter(true_conmean_test, ytest)
+    #Btest = BasisMatrixBlocks(indb, Xmtest)
+    #B2test = Btest * Matrix(I, B.ncol, B.ncol)
+    #preds_test = predict_randomhal(model, Xmtest)
+    
+    #scatter!(true_conmean_test, preds_test)
+    #scatter!(true_conmean_test, GLMNet.predict(glmnet_fit, B2test))
 end
 
 @testset "MLJ Interface" begin
     # Instantiate an MLJ model with mostly default parameters
     Random.seed!(1234)
 
-    model = RandomHALRegressor(smoothness = 1, max_block_size = 20)
+    model = RandomHALRegressor(smoothness = 1, max_block_size = n ÷ 4)
     mach = machine(model, X, y) |> MLJBase.fit!
 
     # Make sure our predictions work well
     preds = MLJBase.predict(mach, X)
     mse = mean((y .- preds).^2)
-    @test mse < 0.1
+    @test mse < 0.01
+
+    preds_test = MLJBase.predict(mach, Xtest)
+    mse_test = mean((true_conmean_test .- preds_test).^2)
+    @test mse_test < 0.05
+
+    scatter(true_conmean_test, ytest)
+    scatter!(true_conmean_test, preds_test)
+
 end
 
 @testset "Logistic regression coordinate descent" begin
-    smoothness = 1
+    smoothness = 0
     #S = collect(combinations([1,2,3]))[2:end]
-    S = [[1]]
+    S = [[1], [2], [1,2]]
     indb = BasisBlocks(S, Xm, smoothness)
-    
-    B = BasisMatrixBlocks(subsample(BasisBlocks(S, Xm, smoothness), 20), Xm)
-    
-    indb = BasisBlocks(S, Xm, smoothness)
-    indb = subsample(indb, 20)
     B = BasisMatrixBlocks(indb, Xm)
     B2 = (B * Matrix(I, B.ncol, B.ncol))
 
@@ -319,7 +351,7 @@ end
     λ_range = [0.1, 0.05, 0.01, 0.001]
     @time path, β0 = coord_descent_binom(B, A, μ, invσ, σ2, λ_range)
 
-    lin_preds = (B * path) .+ β0'
+    lin_preds = (B * path) .+ β0
     preds = 1 ./ (1 .+ exp.(-lin_preds))
 
     mse = [mean((preds[:, i] .- true_pr).^2) for i in 1:size(path, 2)]
@@ -332,29 +364,35 @@ end
     abs_diff = abs.(glmnet_mse .- mse)
     @test all(abs_diff .< 0.01)
 
-    scatter(Xm[:, 1], true_pr)
-    scatter!(Xm[:, 1], preds[:, 3])
-    scatter!(Xm[:, 1], glmnet_preds[:, 3])
+    #scatter(Xm[:, 1], true_pr)
+    #scatter!(Xm[:, 1], preds[:, 3])
+    #scatter!(Xm[:, 1], glmnet_preds[:, 3])
+
+    #scatter(true_pr, preds[:, 2])
+    #scatter!(true_pr, glmnet_preds[:, 2])
+
 end
 
 @testset "Cross-validated logistic regression" begin#
     # Set up model parameters
     #S = collect(combinations([2,3,4]))[2:end]
-    S = [[1]]
+    Random.seed!(1234)
+
+    S = [[1], [2], [1,2]]
     min_λ_ε = 0.001
     n_λ = 100
     smoothness = 1
-    max_block_size = 100
+    max_block_size = n
     @time model = fast_fit_cv_randomhal(S, Xma, Float64.(A); family = Binomial(), max_block_size = max_block_size, smoothness = smoothness, K = 10, min_λ_ε = min_λ_ε, n_λ = n_λ) 
     
-    preds = predict_randomhal(model, Xm)
+    preds = predict_randomhal(model, Xma)
     mse = mean((true_pr .- preds).^2)
-    @test mse < 0.1
+    @test mse < 0.01
 
     # How does this compare to glmnet?
     # Instantiate full basis
     indb = model.indblocks
-    B = BasisMatrixBlocks(indb, Xm)
+    B = BasisMatrixBlocks(indb, Xma)
     B2 = (B * Matrix(I, B.ncol, B.ncol))
     
     # Set up grid so that glmnet is consistent with our method
@@ -374,10 +412,20 @@ end
 
     @test abs(mse - glmnet_mse) < 0.1
 
-    using Plots
-    scatter(Xm[:, 1], true_pr)
-    scatter!(Xm[:, 1], preds)
-    scatter!(Xm[:, 1], glmnet_preds, color = "black")
+    #scatter(true_pr, preds)
+    #scatter!(true_pr, glmnet_preds, color = "black")
+
+    preds_test = predict_randomhal(model, Xmatest)
+    Btest = BasisMatrixBlocks(indb, Xmatest)
+    B2test = Btest * Matrix(I, Btest.ncol, Btest.ncol)
+    glmnet_preds_test = GLMNet.predict(glmnet_fit, B2test, outtype = :prob)
+
+    mse_test = mean((true_pr_test .- preds_test).^2)
+    @test mse_test < 0.01
+
+
+    #scatter(true_pr_test, preds_test)
+    #scatter!(true_pr_test, glmnet_preds_test)
 
 end
 
@@ -385,11 +433,18 @@ end
     # Instantiate an MLJ model with mostly default parameters
     Random.seed!(1234)
 
-    model = RandomHALClassifier(smoothness = 1, max_block_size = 20)
+    model = RandomHALClassifier(smoothness = 1, max_block_size = n)
     mach = machine(model, Xa, Float64.(A)) |> MLJBase.fit!
 
     # Make sure our predictions work well
     preds = MLJBase.predict(mach, Xa)
     mse = mean((true_pr .- preds).^2)
-    @test mse < 0.1
+    @test mse < 0.01
+
+    preds_test = MLJBase.predict(mach, Xatest)
+    mse_test = mean((true_pr_test .- preds_test).^2)
+    @test mse < 0.01
+
+    scatter(true_pr_test, preds_test)
+
 end
