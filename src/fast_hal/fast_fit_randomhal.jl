@@ -61,7 +61,7 @@ function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}
     # Exclude basis functions with few nonzero entries
     full_basis = BasisBlocks(sections, X, smoothness)
     full_basis_data = BasisMatrixBlocks(full_basis, X)
-    full_indices_vector = [findall((transpose(block.F) * ones(block.F.nrow)) .>= 100000) for block in full_basis_data.blocks]
+    full_indices_vector = [findall((transpose(block.F) * ones(block.F.nrow)) .>= sqrt(n)) for block in full_basis_data.blocks]
     indices_vector = [length(indices) > max_block_size ? sort(sample(indices, max_block_size, replace = false)) : indices for indices in full_indices_vector]
 
     indblocks = subsample(full_basis, indices_vector)
