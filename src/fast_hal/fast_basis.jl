@@ -77,7 +77,6 @@ function NestedIndicators(all_ranks::AbstractMatrix{Int64}, section::AbstractVec
 end
 
 function subsample(indb::NestedIndicators, indices)
-
     # Subsample only m observations from the path and bins
     new_indices = sort(indices)
     return NestedIndicators(indb.section, indb.bins[vcat(new_indices, length(indb.path) + 1), :], indb.path[new_indices])
