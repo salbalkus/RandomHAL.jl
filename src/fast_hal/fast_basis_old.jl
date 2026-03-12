@@ -76,11 +76,15 @@ function NestedIndicators(all_ranks::AbstractMatrix{Int64}, section::AbstractVec
     return NestedIndicators(section, bins, path)
 end
 
-function subsample(indb::NestedIndicators, indices)
-
+function subsample(indb::NestedIndicators, max_block_size::Int)
     # Subsample only m observations from the path and bins
-    new_indices = sort(indices)
-    return NestedIndicators(indb.section, indb.bins[vcat(new_indices, length(indb.path) + 1), :], indb.path[new_indices])
+    if max_block_size < length(indb.path)
+        new_indices = sort(sample(1:length(indb.path), max_block_size, replace=false))
+        return NestedIndicators(indb.section, indb.bins[vcat(new_indices, length(indb.path) + 1), :], indb.path[new_indices])
+    else
+        # Otherwise, if we are asked to sample more than the number of bins in the path, just return the original object
+        return indb
+    end
 end
 
 ### Indicator Basis Matrix ###
@@ -190,7 +194,7 @@ function NestedIndicatorBlocks(sections::AbstractVector{<:AbstractVector{Int64}}
     return NestedIndicatorBlocks([NestedIndicators(all_ranks::AbstractMatrix{Int64}, section::AbstractVector{Int64}, X::AbstractMatrix) for section in sections])
 end
 
-subsample(indb::NestedIndicatorBlocks, indices_vector) = NestedIndicatorBlocks([subsample(indb.blocks[i], indices_vector[i]) for i in 1:length(indb.blocks) if length(indices_vector[i]) > 0])
+subsample(indb::NestedIndicatorBlocks, max_block_size::Int) = NestedIndicatorBlocks([subsample(block, max_block_size) for block in indb.blocks])
 
 struct NestedMatrixBlocks <: AbstractNestedMatrix
     blocks::AbstractVector{NestedMatrix}
@@ -265,11 +269,16 @@ function Basis(all_ranks::AbstractMatrix{Int64}, section::AbstractVector{Int64},
     return Basis(indicators, smoothness, reverse(intercept))
 end
 
-function subsample(basis::Basis, indices)
+function subsample(basis::Basis, max_block_size::Int)
     # Subsample only m observations from the path and bins
-    new_indices = sort(indices)
-    indicators = NestedIndicators(basis.indicators.section, basis.indicators.bins[vcat(new_indices, length(basis.indicators.path) + 1), :], basis.indicators.path[new_indices])
-    return Basis(indicators, basis.smoothness, basis.intercept[reverse(length(basis.indicators.path) .- new_indices .+ 1)])
+    if max_block_size < length(basis.indicators.path)
+        new_indices = sort(sample(1:length(basis.indicators.path), max_block_size, replace=false))
+        indicators = NestedIndicators(basis.indicators.section, basis.indicators.bins[vcat(new_indices, length(basis.indicators.path) + 1), :], basis.indicators.path[new_indices])
+        return Basis(indicators, basis.smoothness, basis.intercept[reverse(length(basis.indicators.path) .- new_indices .+ 1)])
+    else
+        # Otherwise, if we are asked to sample more than the number of bins in the path, just return the original object
+        return basis
+    end
 end
 
 struct BasisMatrix <: AbstractNestedMatrix
@@ -354,7 +363,7 @@ function BasisBlocks(sections::AbstractVector{<:AbstractVector{Int64}}, X::Abstr
     return BasisBlocks([Basis(all_ranks, section, X, smoothness) for section in sections])
 end
 
-subsample(indb::BasisBlocks, indices_vector) = BasisBlocks([subsample(indb.blocks[i], indices_vector[i]) for i in 1:length(indb.blocks) if length(indices_vector[i]) > 0])
+subsample(indb::BasisBlocks, max_block_size::Int) = BasisBlocks([subsample(block, max_block_size) for block in indb.blocks])
 
 struct BasisMatrixBlocks <: AbstractNestedMatrix
     blocks::AbstractVector{BasisMatrix}

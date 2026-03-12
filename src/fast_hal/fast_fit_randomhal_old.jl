@@ -58,13 +58,10 @@ function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}
     n = length(y_cs)
 
     # Construct the indicators to produce a basis
-    # Exclude basis functions with few nonzero entries
-    full_basis = BasisBlocks(sections, X, smoothness)
-    full_basis_data = BasisMatrixBlocks(full_basis, X)
-    full_indices_vector = [findall((transpose(block.F) * ones(block.F.nrow)) .>= sqrt(n)) for block in full_basis_data.blocks]
-    indices_vector = [length(indices) > max_block_size ? sort(sample(indices, max_block_size, replace = false)) : indices for indices in full_indices_vector]
-
-    indblocks = subsample(full_basis, indices_vector)
+    # TODO: Could change this to just take a vector of integers as a subset
+    # That way users can sample after the full basis has been constructed,
+    # i.e. based on number of entries.
+    indblocks = subsample(BasisBlocks(sections, X, smoothness), max_block_size)
 
     # Construct the basis and variance estimates for the training data
     B = BasisMatrixBlocks(indblocks, X)
@@ -72,7 +69,7 @@ function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}
     # Fit the initial set of coefficients over the entire dataset
     μ = colmeans(B)
     σ2 = (squares(transpose(B)) ./ B.nrow) .- (μ.^2)
-    σ2[σ2 .< 0.0] .= 0.0 # Handle numerical issues with slightly negative variance estimates very close to zero
+    σ2[σ2 .< 0.0] .= 0.0 # Handle numerical issues with negative variance estimates
     invσ = 1 ./ sqrt.(σ2)
     invσ[isinf.(invσ)] .= 0.0  # Handle zero-variance basis functions
 
