@@ -48,7 +48,7 @@ function binary_bin_search(X::AbstractMatrix{T}, bins::AbstractMatrix{T}) where 
     n = size(X, 1)
     lh = hcat(fill(0, n), fill(size(bins, 1), n))
     mid = lh[:, 1] .+ (lh[:, 2] .- lh[:, 1]) .÷ 2
-    not_yet_finished = 1:n
+    not_yet_finished = collect(1:n)
 
     # Keep halving the search area within nested bins until we've narrowed to a single bin
     while any(lh[:, 1] .+ 1 .< lh[:, 2])

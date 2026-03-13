@@ -58,11 +58,13 @@ function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}
     n = length(y_cs)
 
     # Construct the indicators to produce a basis
-    # Exclude basis functions with few nonzero entries
     full_basis = BasisBlocks(sections, X, smoothness)
     full_basis_data = BasisMatrixBlocks(full_basis, X)
-    full_indices_vector = [findall((transpose(block.F) * ones(block.F.nrow)) .>= sqrt(n)) for block in full_basis_data.blocks]
-    indices_vector = [length(indices) > max_block_size ? sort(sample(indices, max_block_size, replace = false)) : indices for indices in full_indices_vector]
+    # Exclude basis functions with few nonzero entries
+    # the "reverse" call is because the order of the basis functions is reversed when multiplying
+    full_indices_vector = [findall(reverse(transpose(block.F) * ones(block.F.nrow)) .>= sqrt(n)) for block in full_basis_data.blocks]
+    # Subsample blocks with many basis functions
+    indices_vector = [length(indices) > max_block_size ? sort(sample(indices, max_block_size, replace = false)) : sort(indices) for indices in full_indices_vector]
 
     indblocks = subsample(full_basis, indices_vector)
 
