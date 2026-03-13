@@ -30,7 +30,7 @@ function MLJBase.fit(model::RandomHALClassifier, verbosity, X, y)
     end
 
     Xm = Tables.matrix(X)
-    params = fast_fit_cv_randomhal(sections, Xm, y; 
+    params = fast_fit_cv_randomhal(sections, Xm, Float64.(y); 
                 family = Binomial(), K = model.nfolds, 
                 max_block_size = model.max_block_size, smoothness = model.smoothness,
                 newton_max_iters = model.newton_max_iters,
