@@ -84,6 +84,7 @@ function fast_fit_cv_randomhal(sections::AbstractVector{<:AbstractVector{Int64}}
     # β will not change from 0 if λ_max > |mean_shift| / α
     if isnothing(λ)
         corrs = ((transpose(B)*y_cs) .- (μ .* sum(y_cs))) .* invσ
+        #corrs[isnan(corrs)] .= 0.0 # handle numerical issues for simulation
         λ_max = maximum(abs.(corrs)) / n
         λ_min = min_λ_ε * λ_max    
         λ_range = reverse(exp.(range(log(λ_min), log(λ_max), length = n_λ)))

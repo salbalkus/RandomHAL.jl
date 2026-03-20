@@ -15,21 +15,22 @@ using Copulas
 
 Random.seed!(1234)
 
-function binary_scm(d, d_first, ρ)
+function binary_scm(d, d_first, ρ, treat_shift = 0.5)
 
     dgp = @dgp(
         L ~ SklarDist(GaussianCopula(d, ρ), Tuple(fill(Uniform(), d))),
-        g = vec(mean(sin.(2 .* pi .* L[:, 1:d_first]), dims = 2)),
-        A ~ Bernoulli.(logistic.(4 .* g)),
-        Y ~ Normal.((3 .+ A) .* g, 0.2)
+        wave = vec(mean(sin.(2 .* pi .* L[:, 2:d_first]), dims = 2)) .+ 1,
+        g = (1 .+ 2 .* L[:, 1].^2) .* wave,
+        A ~ Bernoulli.(logistic.(2 .* (g .- 1.5))),
+        Y ~ Normal.((1 .+ treat_shift .* A) .* g, 0.1)
     )
 
     scm = StructuralCausalModel(dgp, :A, :Y)
     return scm
 end
 
-scm = binary_scm(40, 40, 0.1)
-n = 200
+scm = binary_scm(4, 4, 0.1)
+n = 80
 ct = rand(scm, n)
 X = Tables.Columns(responseparents(ct))
 Xm = Tables.matrix(X)
@@ -41,16 +42,184 @@ Xma = Tables.matrix(Xa)
 A = vec(treatmentmatrix(ct))
 true_pr = conmean(scm, ct, :A)
 
-cttest = rand(scm, n)
-Xtest = Tables.Columns(responseparents(cttest))
-Xmtest = Tables.matrix(Xtest)
-ytest = vec(responsematrix(cttest))
+family = Normal()
+if isa(family, Normal)
+    σ_y = sqrt(var(y, corrected=false))
+    μ_y = mean(y)
+    y_cs = (y .- μ_y) ./ σ_y
+else
+    y_cs = y
+end
+n = length(y_cs)
 
-Xatest = Tables.Columns(treatmentparents(cttest))
-Xmatest = Tables.matrix(Xatest)
-Atest = vec(treatmentmatrix(cttest))
-true_pr_test = conmean(scm, cttest, :A)
-true_conmean_test = conmean(scm, cttest, :Y)
+# Construct the indicators to produce a basis
+n = length(y)
+col_indices = collect(1:DataAPI.ncol(X))
+
+# First, include all main terms
+sections = [[i] for i in col_indices]
+
+# Then, sample ~ 0.5 * log(n) interaction terms from each interaction order up to 0.5 * log(n)
+for int_order in 2:max(round(Int, 0.5 * log(n)), DataAPI.ncol(X))
+    for _ in 1:min(round(Int, 0.5 * log(n)), binomial(DataAPI.ncol(X), int_order))
+        push!(sections, sample(col_indices, int_order, replace = false))
+    end
+end
+smoothness = 1
+max_block_size = n ÷ 4
+X = Xm
+full_basis = BasisBlocks(sections, X, smoothness)
+full_basis_data = BasisMatrixBlocks(full_basis, X)
+# Exclude basis functions with few nonzero entries
+# the "reverse" call is because the order of the basis functions is reversed when multiplying
+full_indices_vector = [findall(reverse(transpose(block.F) * ones(block.F.nrow)) .>= sqrt(n)) for block in full_basis_data.blocks]
+# Subsample blocks with many basis functions
+indices_vector = [length(indices) > max_block_size ? sort(sample(indices, max_block_size, replace = false)) : sort(indices) for indices in full_indices_vector]
+indblocks = subsample(full_basis, indices_vector)
+
+# Construct the basis and variance estimates for the training data
+B = BasisMatrixBlocks(indblocks, X)
+
+# Fit the initial set of coefficients over the entire dataset
+μ = colmeans(B)
+σ2 = (squares(transpose(B)) ./ B.nrow) .- (μ.^2)
+σ2[σ2 .< 0.0] .= 0.0 # Handle numerical issues with slightly negative variance estimates very close to zero
+invσ = 1 ./ sqrt.(σ2)
+invσ[isinf.(invσ)] .= 0.0  # Handle zero-variance basis functions
+
+# If λ is unspecified, automatically construct a grid.
+# We choose λ_max as the smallest value of λ that will guarantee 
+# all coefficients remain 0 after updating for the first time.
+# β will not change from 0 if λ_max > |mean_shift| / α
+λ = nothing
+min_λ_ε = 0.001
+n_λ = 100
+if isnothing(λ)
+    corrs = ((transpose(B)*y_cs) .- (μ .* sum(y_cs))) .* invσ
+    λ_max = maximum(abs.(corrs)) / n
+    λ_min = min_λ_ε * λ_max    
+    λ_range = reverse(exp.(range(log(λ_min), log(λ_max), length = n_λ)))
+else
+    λ_range = sort(λ)
+end
+
+smoothness = 0
+max_block_size = n ÷ 4
+n = 400
+family = Normal()
+
+λ = nothing
+min_λ_ε = 0.001
+n_λ = 100
+n = 100
+
+make_comparison(n, k) = [
+    "RandomHAL0" => (
+    RandomHALRegressor(smoothness = 0, max_block_size = n ÷ k, tol = 1e-7, nfolds = 5, nlambda = 100),
+    RandomHALClassifier(smoothness = 0, max_block_size = n ÷ k, tol = 1e-7, nfolds = 5, nlambda = 100)
+    ),
+    "RandomHAL1" => (
+    RandomHALRegressor(smoothness = 1, max_block_size = n ÷ k, tol = 1e-7, nfolds = 5, nlambda = 100),
+    RandomHALClassifier(smoothness = 1, max_block_size = n ÷ k, tol = 1e-7, nfolds = 5, nlambda = 100)
+    ),
+    "HAL0" => (
+    HALRegressor(0),
+    HALBinaryClassifier(0)
+    ),
+    "HAL1" => (
+    HALRegressor(1),
+    HALBinaryClassifier(1)
+    )
+]
+
+function binary_scm(d, d_first, ρ, treat_shift = 0.5)
+
+    dgp = @dgp(
+        L ~ SklarDist(GaussianCopula(d, ρ), Tuple(fill(Uniform(), d))),
+        wave = vec(mean(sin.(2 .* pi .* L[:, 2:d_first]), dims = 2)) .+ 1,
+        g = (1 .+ 2 .* L[:, 1].^2) .* wave,
+        A ~ Bernoulli.(logistic.(2 .* (g .- 1.5))),
+        Y ~ Normal.((1 .+ treat_shift .* A) .* g, 0.1)
+    )
+
+    scm = StructuralCausalModel(dgp, :A, :Y)
+    cate(L) = treat_shift .* (1 .+ 2 .* L[:, 1].^2) .* mean(vec(mean(sin.(2 .* pi .* L[:, 2:d_first]), dims = 2)) .+ 1)
+    
+    return scm, cate
+end
+
+function safe_predict(mach, X,  miny, maxy)
+    preds = MLJBase.predict(mach, X)
+    preds[preds .< miny] .= miny
+    preds[preds .> maxy] .= maxy
+    return preds
+end
+
+modellist = make_comparison(n, 4)
+scm, cate = binary_scm(4,4,0.1)
+
+for _ in 1:10
+    ct = rand(scm, n)
+
+
+        XA = responseparents(ct)
+        X = treatmentparents(ct)
+        A = treatmentmatrix(ct)[:,1]
+        y = responsematrix(ct)[:, 1]
+        L1 = (L1 = ct.data.L_1,)
+        miny = minimum(y)
+        maxy = maximum(y)
+
+
+        # Generate testing data
+        cttest = rand(scm, n)
+        XAtest = responseparents(cttest)
+        Xtest = responseparents(cttest)
+        Atest = treatmentmatrix(ct)[:,1]
+        ytest = responsematrix(cttest)[:, 1]
+        L1test = (L1 = cttest.data.L_1,)
+
+        # Get true function values
+        true_conmean = conmean(scm, cttest, :Y)
+        true_prob = conmean(scm, cttest, :A)
+
+        ct_A1 = intervene(ct, treat_all)
+        XA_A1 = responseparents(ct_A1)
+        ct_A0 = intervene(ct, treat_none)
+        XA_A0 = responseparents(ct_A0)
+
+        #for model_pair in modellist
+        model_pair = modellist[2]
+                outcome_model, propensity_model = model_pair[2]
+
+                # Fit models
+                time_outcome = @elapsed outcome_mach = machine(outcome_model, XA, y) |> MLJBase.fit!
+                time_propensity = @elapsed propensity_mach = machine(propensity_model, X, A) |> MLJBase.fit!
+
+                # Estimate performance of models on new data
+                mse_outcome = mean((safe_predict(outcome_mach, XAtest, miny, maxy) .- true_conmean).^2)
+                mse_propensity = mean((MLJBase.predict(propensity_mach, Xtest) .- true_prob).^2)
+
+                # Compute one-step estimates using models
+                prA = MLJBase.predict(propensity_mach, X)
+                μ = safe_predict(outcome_mach, XA, miny, maxy)
+                μ1 = safe_predict(outcome_mach, XA_A1, miny, maxy)
+                μ0 = safe_predict(outcome_mach, XA_A0, miny, maxy)
+                eif = μ1 - μ0 + ((A ./ prA) .- ((1 .- A) ./ (1 .- prA))) .* (y .- μ)
+
+
+                plugin = mean(μ1 .- μ0)
+                ose = mean(eif)
+                ose_var = var(eif) / n
+
+                # Compute CATE
+                cate_mach = machine(outcome_model, L1, eif) |> MLJBase.fit!
+                cate_pred = MLJBase.predict(cate_mach, L1test)
+                cate_mse = mean((cate_pred .- cate(Tables.matrix(Xtest))).^2)
+
+        end
+    #end
+
 
 
 # Test NestedMatrix functionality

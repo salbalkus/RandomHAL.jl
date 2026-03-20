@@ -31,7 +31,7 @@ dgp = @dgp(
         Y ~ (@. Normal(sin.(2*pi * X2) .+ sin(2*pi*X3) .+ X2 .* X3, 0.1))# + sin(2*pi*X4) .+ A, 0.1))
     )
 scm = StructuralCausalModel(dgp, :A, :Y)
-n = 100
+n = 1600
 ct = rand(scm, n)
 X = Tables.Columns(responseparents(ct))
 Xm = Tables.matrix(X)
@@ -89,8 +89,9 @@ true_conmean_test = conmean(scm, cttest, :Y)
     B_true = (Xm[:, j] .>= Xm[pa, j]') .* (Xm[:, i] .>= Xm[pa, i]')
 
     # Are the bins constructed correctly?
-    bins = indicator.bins
-    order = binary_bin_search(Xma[:, [i, j]], bins)
+    # Create a view of the bins from the original matrix and path
+    bins = @view(indicator.X[indicator.path, indicator.section])
+    order = binary_bin_search(Xma[:, [i, j]], indicator.X, indicator.path, indicator.section, length(indicator.path))
     @test order == [sum(all(bins .<= row', dims = 2)) for row in eachrow(Xma[:, [i, j]])]
     @test B_true * ones(size(B_true, 2)) == B * ones(B.ncol)
 
@@ -244,7 +245,7 @@ end
     #scatter!(true_conmean_test, GLMNet.predict(glmnet_fit, B2test)[:, 3])
 end
 
-@testset "Cross-validated model" begin
+#@testset "Cross-validated model" begin
     # Make sure to center y to make comparison with GLMNet feasible
     ycs = (y .- mean(y)) ./ sqrt(var(y, corrected=false))
 
@@ -256,7 +257,7 @@ end
     smoothness = 1
 
     max_block_size = n ÷ 4
-    @time model = fast_fit_cv_randomhal(S, Xm, ycs; max_block_size = max_block_size, smoothness = smoothness, K = 10, min_λ_ε = min_λ_ε, n_λ = n_λ) 
+    @profview_allocs model = fast_fit_cv_randomhal(S, Xm, ycs; max_block_size = max_block_size, smoothness = smoothness, K = 10, min_λ_ε = min_λ_ε, n_λ = n_λ) 
     
     preds = predict_randomhal(model, Xm)
     mse = mean((ycs .- preds).^2)
