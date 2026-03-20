@@ -7,6 +7,7 @@
 extern int suite_nested_matrix(void);
 extern int suite_rank_and_path(void);
 extern int suite_basis_matrix(void);
+extern int suite_coordinate_descent(void);
 
 int main(int argc, char *argv[]) {
     /* Initialize CUnit test registry */
@@ -21,6 +22,9 @@ int main(int argc, char *argv[]) {
         goto cleanup;
     
     if (CUE_SUCCESS != suite_basis_matrix())
+        goto cleanup;
+    
+    if (CUE_SUCCESS != suite_coordinate_descent())
         goto cleanup;
     
     /* Run tests */

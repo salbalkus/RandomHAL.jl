@@ -23,6 +23,8 @@ typedef struct {
 /* Create parameter struct with defaults */
 cd_gaussian_params_t coord_descent_gaussian_params_default(void);
 
+/* Note: soft_threshold is defined in common.h as a static inline function */
+
 /* Fit Gaussian model using coordinate descent.
  * 
  * Args:

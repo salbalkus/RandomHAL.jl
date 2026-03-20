@@ -21,7 +21,7 @@ OBJDIR = .objbuild
 TESTOBJ = $(OBJDIR)/test
 
 # Source files for library
-LIB_SOURCES = common.h memory_pool.c rank_and_path.c nested_matrix.c basis_matrix.c coordinate_descent.c fit_model.c
+LIB_SOURCES = common.h memory_pool.c rank_and_path.c nested_matrix.c basis_matrix.c coordinate_descent.c fit_model.c c_julia_wrapper.c
 LIB_OBJECTS = $(patsubst %.c,$(OBJDIR)/%.o,$(filter %.c,$(LIB_SOURCES)))
 
 # Library targets
@@ -50,7 +50,7 @@ $(LIB_SHARED): $(LIB_OBJECTS)
 ifeq ($(CUNIT_AVAILABLE),yes)
 
 # Test sources
-TEST_SOURCES = $(TESTDIR)/test_nested_matrix.c $(TESTDIR)/test_rank_and_path.c $(TESTDIR)/test_basis_matrix.c $(TESTDIR)/run_tests.c
+TEST_SOURCES = $(TESTDIR)/test_nested_matrix.c $(TESTDIR)/test_rank_and_path.c $(TESTDIR)/test_basis_matrix.c $(TESTDIR)/test_coordinate_descent.c $(TESTDIR)/run_tests.c
 TEST_OBJECTS = $(patsubst $(TESTDIR)/%.c,$(TESTOBJ)/%.o,$(TEST_SOURCES))
 TEST_FIXTURE_OBJECTS = $(TESTOBJ)/test_fixtures.o
 TEST_RUNNER = run_tests
