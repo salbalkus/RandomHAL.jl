@@ -85,13 +85,13 @@ function random_sections_and_knots(X::Tables.Columns, n_sampled_features; guaran
 
     # The standard we establish to limit interaction orders to 0.5 * log(n) 
     if isnothing(interaction_order_weights)
-        max_int_order = Int(round(0.5 * log(n)))
+        max_int_order = minimum(d, Int(round((0.5 * log(n)) + 1)))
         interaction_order_weights = StatsBase.Weights(fill(1/max_int_order, max_int_order)) # Uniformly sample interaction orders
     end
 
     # Otherwise we assume the user will leave out higher-order interactions in their list of sampling weights
-    
-    random_interaction_orders = sample(1:length(interaction_order_weights), interaction_order_weights, n_sampled_features; replace = true)
+    min_ord = minimum(d, length(interaction_order_weights))
+    random_interaction_orders = sample(1:min_ord, interaction_order_weights[1:min_ord], n_sampled_features; replace = true)
 
     if isnothing(section_weights)
         section_weights = StatsBase.Weights(fill(1/d, d)) # Uniformly sample sections
