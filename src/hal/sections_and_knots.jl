@@ -82,11 +82,16 @@ function random_sections_and_knots(X::Tables.Columns, n_sampled_features; guaran
     # Next, we build a distribution over the sections and sample from it
     # We do this by specifying a distribution over the interaction orders,
     # and then a distribution over the sections for each interaction order
+
+    # The standard we establish to limit interaction orders to 0.5 * log(n) 
     if isnothing(interaction_order_weights)
-        interaction_order_weights = StatsBase.Weights(fill(1/d, d)) # Uniformly sample interaction orders
+        max_int_order = Int(round(0.5 * log(n)))
+        interaction_order_weights = StatsBase.Weights(fill(1/max_int_order, max_int_order)) # Uniformly sample interaction orders
     end
 
-    random_interaction_orders = sample(1:d, interaction_order_weights, n_sampled_features; replace = true)
+    # Otherwise we assume the user will leave out higher-order interactions in their list of sampling weights
+    
+    random_interaction_orders = sample(1:length(interaction_order_weights), interaction_order_weights, n_sampled_features; replace = true)
 
     if isnothing(section_weights)
         section_weights = StatsBase.Weights(fill(1/d, d)) # Uniformly sample sections
@@ -95,7 +100,8 @@ function random_sections_and_knots(X::Tables.Columns, n_sampled_features; guaran
     random_sections = [sample(1:d, section_weights, o; replace = false) for o in random_interaction_orders]
 
     # Then, we build a distribution over the knots and sample from it
-
+    # TODO: Avoid sampling knots with many zeros... how to do this?
+    # Probably needs to be per-section... or maybe it is better to just filter after generating the matrix?
     if isnothing(knot_weights)
         knot_weights = StatsBase.Weights(fill(1/n, n)) # Uniformly sample knots
     end

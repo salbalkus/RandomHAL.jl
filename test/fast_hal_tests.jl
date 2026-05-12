@@ -31,7 +31,7 @@ dgp = @dgp(
         Y ~ (@. Normal(sin.(2*pi * X2) .+ sin(2*pi*X3) .+ X2 .* X3, 0.1))# + sin(2*pi*X4) .+ A, 0.1))
     )
 scm = StructuralCausalModel(dgp, :A, :Y)
-n = 1600
+n = 400
 ct = rand(scm, n)
 X = Tables.Columns(responseparents(ct))
 Xm = Tables.matrix(X)
@@ -245,7 +245,7 @@ end
     #scatter!(true_conmean_test, GLMNet.predict(glmnet_fit, B2test)[:, 3])
 end
 
-#@testset "Cross-validated model" begin
+@testset "Cross-validated model" begin
     # Make sure to center y to make comparison with GLMNet feasible
     ycs = (y .- mean(y)) ./ sqrt(var(y, corrected=false))
 
@@ -257,7 +257,7 @@ end
     smoothness = 1
 
     max_block_size = n ÷ 4
-    @profview_allocs model = fast_fit_cv_randomhal(S, Xm, ycs; max_block_size = max_block_size, smoothness = smoothness, K = 10, min_λ_ε = min_λ_ε, n_λ = n_λ) 
+    @time model = fast_fit_cv_randomhal(S, Xm, ycs; max_block_size = max_block_size, smoothness = smoothness, K = 10, min_λ_ε = min_λ_ε, n_λ = n_λ) 
     
     preds = predict_randomhal(model, Xm)
     mse = mean((ycs .- preds).^2)
@@ -305,8 +305,8 @@ end
     # Instantiate an MLJ model with mostly default parameters
     Random.seed!(1234)
 
-    model = RandomHALRegressor(smoothness = 1, max_block_size = n ÷ 4)
-    mach = machine(model, X, y) |> MLJBase.fit!
+    model = NRHALRegressor(smoothness = 1, max_block_size = n ÷ 4)
+    @time mach = machine(model, X, y) |> MLJBase.fit!
 
     # Make sure our predictions work well
     preds = MLJBase.predict(mach, X)
@@ -434,7 +434,7 @@ end
     # Instantiate an MLJ model with mostly default parameters
     Random.seed!(1234)
 
-    model = RandomHALClassifier(smoothness = 1, max_block_size = n)
+    model = NRHALClassifier(smoothness = 1, max_block_size = n)
     mach = machine(model, Xa, Float64.(A)) |> MLJBase.fit!
 
     # Make sure our predictions work well

@@ -1,7 +1,7 @@
 
 
 ### Continuous Data ###
-@mlj_model mutable struct RandomHALRegressor <: MMI.Deterministic
+@mlj_model mutable struct NRHALRegressor <: MMI.Deterministic
     smoothness::Int64 = 0::(_ >= 0)
     max_block_size::Int64 = 100::(_ > 0)
     nlambda::Int64 = 100::(_ > 0)
@@ -13,7 +13,7 @@
     α::Float64 = 1.0::(_ >= 0.0 && _ <= 1.0)
 end
 
-function MLJBase.fit(model::RandomHALRegressor, verbosity, X, y)
+function MLJBase.fit(model::NRHALRegressor, verbosity, X, y)
     n = length(y)
     col_indices = collect(1:DataAPI.ncol(X))
 
@@ -41,4 +41,4 @@ function MLJBase.fit(model::RandomHALRegressor, verbosity, X, y)
     return fitresult, cache, report
 end
 
-MLJBase.predict(model::RandomHALRegressor, fitresult, Xnew) = predict_randomhal(fitresult.params, Tables.matrix(Xnew))
+MLJBase.predict(model::NRHALRegressor, fitresult, Xnew) = predict_randomhal(fitresult.params, Tables.matrix(Xnew))

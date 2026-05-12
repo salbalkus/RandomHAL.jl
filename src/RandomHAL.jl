@@ -67,10 +67,10 @@ module RandomHAL
     #export fast_fit_cv_randomhal_binom, predict_randomhal_binom
 
     include("fast_hal/fast_hal_mlj_interface.jl")
-    export RandomHALRegressor
+    export NRHALRegressor
 
     include("fast_hal/fast_hal_binom_mlj_interface.jl")
-    export RandomHALClassifier
+    export NRHALClassifier
     export fit, predict
 
 end

@@ -16,6 +16,7 @@ using RandomHAL
 
 Random.seed!(1234)
 dgp = @dgp(
+        X1 ~ Beta(1, 1),
         X2 ~ Beta(2, 3),
         X3 ~ Beta(3, 2),
         X4 ~ Beta(3, 3),
@@ -23,17 +24,16 @@ dgp = @dgp(
         Y ~ (@. Normal(A + X2 * X3 + A * X2 + A * X4 + 0.2 * (sqrt(10*X3*X4) + sqrt(10 * X2) + sqrt(10 * X3) + sqrt(10*X4)), 0.1))
     )
 scm = StructuralCausalModel(dgp, :A, :Y)
-n = 100
+n = 900
 ct = rand(scm, n)
 X = Tables.Columns(responseparents(ct))
 y = vec(responsematrix(ct))
 
 function test_basis(smoothness)
     basis, all_sections, term_lengths = ha_basis_matrix(X, smoothness)#; basis_type = basis_type)
-
     @test size(basis)[1] == n
     #@test size(basis)[2] == n * (2^length(X) - 1) - (n - 1)
-    @test basis[:, (n * 7) + 1] == ct.data.A
+    @test basis[:, (n * (2^(length(X)-1)-1)) + 1] == ct.data.A
     lasso, β, β0, nz = fit_glmnet(basis, y::AbstractVector, Normal(); nlambda = 100, nfolds = 10)
 
     sections, knots = get_sections_and_knots(X, nz, all_sections, term_lengths)
@@ -51,7 +51,6 @@ end
     nfeatures = Int(round(n*log(n)))
     sections_r, knots_r = random_sections_and_knots(X, nfeatures)
     basis_r = ha_basis_matrix(X, sections_r, knots_r, 0)
-
 
     @test length(sections_r) == nfeatures
     @test length.(sections_r) == length.(knots_r)
@@ -78,10 +77,10 @@ end
     @test halmse < 0.05
 
     # Random HAL
-    n_samples = Int(round(n * log(n)))
-    model3 = SlowRandomHALRegressor(0, n, 5, n_samples, (guaranteed_sections = [[4]], interaction_order_weights = Weights([8, 4, 2, 0])))
+    n_samples = 0.5 * Int(round(n * log(n)))
+    model_rhal = RandomHALRegressor(0, 100, 5, n_samples, 0, (guaranteed_sections = [[5]], interaction_order_weights = Weights([8, 4, 2, 1])))
     
-    @time rhal = machine(model3, X, y) |> fit!
+    @time rhal = machine(model_rhal, X, y) |> fit!
 
     rhalpreds = MLJBase.predict(rhal, Xtest)
     rhalmse = mean((rhalpreds .- true_mean).^2)
@@ -100,7 +99,9 @@ end
     halpredsbin = MLJBase.predict(halbin, Xbintest)
     halbinmse = mean((halpredsbin .- conmean(scm, cttest, :A)).^2)
     
-    @time rhalbin = machine(SlowRandomHALBinaryClassifier(), Xbin, A) |> fit!
+    #min_nonzeros = Int(floor(sqrt(n)))
+    model_brhal = RandomHALBinaryClassifier(0, 100, 5, n_samples, 0, NamedTuple())
+    @time rhalbin = machine(model_brhal, Xbin, A) |> fit!
     rhalpredsbin = MLJBase.predict(rhalbin, Xbintest)
     rhalbinmse = mean((rhalpredsbin .- conmean(scm, cttest, :A)).^2)
 
