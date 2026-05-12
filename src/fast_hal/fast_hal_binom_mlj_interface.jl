@@ -1,7 +1,7 @@
 
 
 ### Continuous Data ###
-@mlj_model mutable struct RandomHALClassifier <: MMI.Probabilistic
+@mlj_model mutable struct NRHALClassifier <: MMI.Probabilistic
     smoothness::Int64 = 0::(_ >= 0)
     max_block_size::Int64 = 100::(_ > 0)
     nlambda::Int64 = 100::(_ > 0)
@@ -15,7 +15,7 @@
     α::Float64 = 1.0::(_ >= 0.0 && _ <= 1.0)
 end
 
-function MLJBase.fit(model::RandomHALClassifier, verbosity, X, y)
+function MLJBase.fit(model::NRHALClassifier, verbosity, X, y)
     n = length(y)
     col_indices = collect(1:DataAPI.ncol(X))
 
@@ -45,4 +45,4 @@ function MLJBase.fit(model::RandomHALClassifier, verbosity, X, y)
     return fitresult, cache, report
 end
 
-MLJBase.predict(model::RandomHALClassifier, fitresult, Xnew) = predict_randomhal(fitresult.params, Tables.matrix(Xnew))
+MLJBase.predict(model::NRHALClassifier, fitresult, Xnew) = predict_randomhal(fitresult.params, Tables.matrix(Xnew))

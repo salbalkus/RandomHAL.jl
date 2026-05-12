@@ -98,15 +98,6 @@ function coord_descent(X::BasisMatrixBlocks, y::Vector{Float64}, μ::Vector{Floa
         # Finally, repeat on the entire set of variables. If nothing changes, done!
         # Otherwise, update the active set and repeat 
 
-        # Below is some code to implement screening used by GLMNet
-        # Commented out to disable it for testing 
-        # The active set is defined initially by the sequential strong rule (Tibshirani et al. 2010)
-        #if λ_index == 1
-        #    active = abs.(transpose(X) * y) .< λ
-        #else
-        #    active = abs.(transpose(X) * (y - X * β[:,λ_index-1])) .< ((2*λ) - λ_range[λ_index - 1])
-        #end
-
         # Initialize active set and iteration counter
         active = trues(d)
         next_active = copy(active)
@@ -129,6 +120,7 @@ function coord_descent(X::BasisMatrixBlocks, y::Vector{Float64}, μ::Vector{Floa
             end
 
             # One more cycle over all variables to assess if active set changes
+            # This also serves as a safety check for the screening rule
             cycle_coord!(trues(d), β_next, β_prev, X, res, l_sum, l_squares, r_shift, nz_count, μ, invσ, lasso_penalty, ridge_penalty)
             next_active .= β_next .!= 0
             β_prev .= β_next

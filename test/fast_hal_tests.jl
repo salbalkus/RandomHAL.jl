@@ -31,7 +31,7 @@ dgp = @dgp(
         Y ~ (@. Normal(sin.(2*pi * X2) .+ sin(2*pi*X3) .+ X2 .* X3, 0.1))# + sin(2*pi*X4) .+ A, 0.1))
     )
 scm = StructuralCausalModel(dgp, :A, :Y)
-n = 100
+n = 400
 ct = rand(scm, n)
 X = Tables.Columns(responseparents(ct))
 Xm = Tables.matrix(X)
@@ -89,8 +89,9 @@ true_conmean_test = conmean(scm, cttest, :Y)
     B_true = (Xm[:, j] .>= Xm[pa, j]') .* (Xm[:, i] .>= Xm[pa, i]')
 
     # Are the bins constructed correctly?
-    bins = indicator.bins
-    order = binary_bin_search(Xma[:, [i, j]], bins)
+    # Create a view of the bins from the original matrix and path
+    bins = @view(indicator.X[indicator.path, indicator.section])
+    order = binary_bin_search(Xma[:, [i, j]], indicator.X, indicator.path, indicator.section, length(indicator.path))
     @test order == [sum(all(bins .<= row', dims = 2)) for row in eachrow(Xma[:, [i, j]])]
     @test B_true * ones(size(B_true, 2)) == B * ones(B.ncol)
 
@@ -304,8 +305,8 @@ end
     # Instantiate an MLJ model with mostly default parameters
     Random.seed!(1234)
 
-    model = RandomHALRegressor(smoothness = 1, max_block_size = n ÷ 4)
-    mach = machine(model, X, y) |> MLJBase.fit!
+    model = NRHALRegressor(smoothness = 1, max_block_size = n ÷ 4)
+    @time mach = machine(model, X, y) |> MLJBase.fit!
 
     # Make sure our predictions work well
     preds = MLJBase.predict(mach, X)
@@ -433,7 +434,7 @@ end
     # Instantiate an MLJ model with mostly default parameters
     Random.seed!(1234)
 
-    model = RandomHALClassifier(smoothness = 1, max_block_size = n)
+    model = NRHALClassifier(smoothness = 1, max_block_size = n)
     mach = machine(model, Xa, Float64.(A)) |> MLJBase.fit!
 
     # Make sure our predictions work well

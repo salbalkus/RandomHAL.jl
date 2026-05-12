@@ -40,19 +40,34 @@ end
 
 # Given a set of nested bins and a vector of observations, output a vector of indices that labels in which bin each observation is contained.
 # This will become "order" in a NestedMatrix
-function binary_bin_search(X::AbstractMatrix{T}, bins::AbstractMatrix{T}) where T<:Number
+# Uses views of the original matrix instead of copies, and handles boundary without an explicit Inf row
+function binary_bin_search(X::AbstractMatrix{T}, bins_data::AbstractMatrix{T}, bin_indices::AbstractVector{Int64}, section::AbstractVector{Int64}, num_bins::Int64) where T<:Number
     # Check input validity
-    size(bins, 2) != size(X, 2) && error("In a binary bin search, the width of each bin must be the same as the width of the input matrix.")
+    length(section) != size(X, 2) && error("In a binary bin search, the width of each bin must be the same as the width of the input matrix.")
 
     # Set up tracking variables to perform a binary search for each observation simultaneously
     n = size(X, 1)
-    lh = hcat(fill(0, n), fill(size(bins, 1), n))
+    lh = hcat(fill(0, n), fill(num_bins + 1, n))  # right boundary is num_bins + 1 (virtual Inf row)
     mid = lh[:, 1] .+ (lh[:, 2] .- lh[:, 1]) .÷ 2
     not_yet_finished = collect(1:n)
 
     # Keep halving the search area within nested bins until we've narrowed to a single bin
     while any(lh[:, 1] .+ 1 .< lh[:, 2])
-        checks = vec(any(X[not_yet_finished, :] .< bins[mid[not_yet_finished], :], dims=2) .+ 1)
+        checks = ones(Int64, length(not_yet_finished))
+        # Compare X to bins using views, handling the virtual Inf row at num_bins + 1
+        for i in 1:length(not_yet_finished)
+            idx = not_yet_finished[i]
+            mid_val = mid[idx]
+            if mid_val <= num_bins
+                # Compare X[idx, :] with bins[bin_indices[mid_val], section]
+                if any(@view(X[idx, :]) .< @view(bins_data[bin_indices[mid_val], section]))
+                    checks[i] = 2
+                end
+            else
+                # mid > num_bins, so treat as X < Inf (always true)
+                checks[i] = 2
+            end
+        end
         lh[[CartesianIndex(not_yet_finished[i], checks[i]) for i in 1:length(not_yet_finished)]] .= mid[not_yet_finished]
         mid[not_yet_finished] .= lh[not_yet_finished, 1] .+ (lh[not_yet_finished, 2] .- lh[not_yet_finished, 1]) .÷ 2
 
@@ -66,20 +81,30 @@ end
 ### Nested Indicators Structure ###
 struct NestedIndicators
     section::AbstractVector{Int64}
-    bins::AbstractMatrix
+    X::AbstractMatrix  # Reference to original matrix (not a copy)
     path::AbstractVector{Int64}
 end
 
 function NestedIndicators(all_ranks::AbstractMatrix{Int64}, section::AbstractVector{Int64}, X::AbstractMatrix)
     path = path_sample(all_ranks, section; start=1)
-    bins = vcat(X[path, section], fill(Inf, length(section))')
-    return NestedIndicators(section, bins, path)
+    return NestedIndicators(section, X, path)
 end
 
 function subsample(indb::NestedIndicators, indices)
-    # Subsample only m observations from the path and bins
+    # Subsample only the path; X and section remain the same
     new_indices = sort(indices)
-    return NestedIndicators(indb.section, indb.bins[vcat(new_indices, length(indb.path) + 1), :], indb.path[new_indices])
+    return NestedIndicators(indb.section, indb.X, indb.path[new_indices])
+end
+
+function subsample(indb::NestedIndicators, max_block_size::Int)
+    # Subsample with random sampling when given a max_block_size
+    if max_block_size < length(indb.path)
+        new_indices = sort(sample(1:length(indb.path), max_block_size, replace=false))
+        return subsample(indb, new_indices)
+    else
+        # Otherwise, if we are asked to sample more than the number of bins in the path, just return the original object
+        return indb
+    end
 end
 
 ### Indicator Basis Matrix ###
@@ -90,8 +115,8 @@ struct NestedMatrix <: AbstractNestedMatrix
 end
 
 function NestedMatrix(M::NestedIndicators, X::AbstractMatrix)
-    order = binary_bin_search(X[:, M.section], M.bins)
-    return NestedMatrix(order, size(M.bins, 1) - 1, length(order))
+    order = binary_bin_search(X[:, M.section], M.X, M.path, M.section, length(M.path))
+    return NestedMatrix(order, length(M.path), length(order))
 end
 
 # Matrix-free multiplication #
@@ -145,9 +170,6 @@ end
 # Matrix-free multiplication #
 
 # Take inner product of a vector of observations with each indicator basis
-# TODO: THERE IS AN ERROR. THIS FAILS WHEN MATRIX IS A SUBSET
-# The issue is that some columns get zeroed out because of the "<= B.ncol" condition
-# How to fix?
 function mul(B::NestedMatrixTranspose, v::AbstractVector) # assumes B and v are compatible
     out = zeros(B.nrow)
     # Get sum within each bin
@@ -190,6 +212,11 @@ function NestedIndicatorBlocks(sections::AbstractVector{<:AbstractVector{Int64}}
 end
 
 subsample(indb::NestedIndicatorBlocks, indices_vector) = NestedIndicatorBlocks([subsample(indb.blocks[i], indices_vector[i]) for i in 1:length(indb.blocks) if length(indices_vector[i]) > 0])
+
+function subsample(indb::NestedIndicatorBlocks, max_block_size::Int)
+    # Subsample each block with random sampling
+    return NestedIndicatorBlocks([subsample(indb.blocks[i], max_block_size) for i in 1:length(indb.blocks)])
+end
 
 struct NestedMatrixBlocks <: AbstractNestedMatrix
     blocks::AbstractVector{NestedMatrix}
@@ -265,10 +292,21 @@ function Basis(all_ranks::AbstractMatrix{Int64}, section::AbstractVector{Int64},
 end
 
 function subsample(basis::Basis, indices)
-    # Subsample only m observations from the path and bins
+    # Subsample only m observations from the path
     new_indices = sort(indices)
-    indicators = NestedIndicators(basis.indicators.section, basis.indicators.bins[vcat(new_indices, length(basis.indicators.path) + 1), :], basis.indicators.path[new_indices])
+    indicators = NestedIndicators(basis.indicators.section, basis.indicators.X, basis.indicators.path[new_indices])
     return Basis(indicators, basis.smoothness, basis.intercept[reverse(length(basis.indicators.path) .- new_indices .+ 1)])
+end
+
+function subsample(basis::Basis, max_block_size::Int)
+    # Subsample with random sampling when given a max_block_size
+    if max_block_size < length(basis.indicators.path)
+        new_indices = sort(sample(1:length(basis.indicators.path), max_block_size, replace=false))
+        return subsample(basis, new_indices)
+    else
+        # Otherwise, if we are asked to sample more than the number of bins in the path, just return the original object
+        return basis
+    end
 end
 
 struct BasisMatrix <: AbstractNestedMatrix
@@ -327,7 +365,11 @@ struct BasisMatrixTranspose <: AbstractNestedMatrix
     nrow::Int64
 end
 
-mul(B::BasisMatrixTranspose, v::AbstractVector) = (mul(B.F, B.l .* v) .- (B.r .* mul(B.F, v)))
+function mul(B::BasisMatrixTranspose, v::AbstractVector)
+    # Result: (F * (l.*v)) - r .* (F*v)
+    # Keep the double multiplication since NestedMatrixTranspose has a different structure
+    return (mul(B.F, B.l .* v) .- (B.r .* mul(B.F, v)))
+end
 
 function Base.:*(B::BasisMatrixTranspose, v::AbstractVector)
     B.ncol != length(v) && throw(ArgumentError(DIM_ERRMSG)) # check if B and v are compatible
@@ -354,6 +396,11 @@ function BasisBlocks(sections::AbstractVector{<:AbstractVector{Int64}}, X::Abstr
 end
 
 subsample(indb::BasisBlocks, indices_vector) = BasisBlocks([subsample(indb.blocks[i], indices_vector[i]) for i in 1:length(indb.blocks) if length(indices_vector[i]) > 0])
+
+function subsample(indb::BasisBlocks, max_block_size::Int)
+    # Subsample each block with random sampling
+    return BasisBlocks([subsample(indb.blocks[i], max_block_size) for i in 1:length(indb.blocks)])
+end
 
 struct BasisMatrixBlocks <: AbstractNestedMatrix
     blocks::AbstractVector{BasisMatrix}

@@ -30,14 +30,21 @@ end
 fit_hal(X, y, family, smoothness::Int, weights::Nothing; glmnet_args...) = fit_hal(X, y, family, smoothness, ones(nrow(X)); glmnet_args...)
 
 # Fit a randomized approximation to the full HAL model for computational efficiency
-function fit_random_hal(X, y, family, smoothness::Int, nfeatures::Int, sampler_params::NamedTuple, weights::AbstractVector{<:Real}; glmnet_args...)
+function fit_random_hal(X, y, family, smoothness::Int, nfeatures::Int, min_nonzeros::Int, sampler_params::NamedTuple, weights::AbstractVector{<:Real}; glmnet_args...)
 
     # Convert any Table into a common type
     x = Tables.Columns(X)
+    n = length(y)
 
     # Construct the basis matrix from the data
     sections, knots = random_sections_and_knots(x, nfeatures; sampler_params...)
     basis = ha_basis_matrix(x, sections, knots, smoothness)
+
+    # Optional: Filter out basis functions with a negligible number of nonzero entries
+    if min_nonzeros > 0
+        nonnegligible = (transpose(basis .!= 0) * ones(size(basis, 1))) .>= min_nonzeros
+        basis = basis[:, nonnegligible]
+    end
 
     # Fit the LASSO model
     lasso, β, β0, nz = fit_glmnet(basis, y, family; glmnet_args..., weights = weights)
@@ -50,9 +57,13 @@ function fit_random_hal(X, y, family, smoothness::Int, nfeatures::Int, sampler_p
 end
 
 # If no weights are provided, assume equal weights
-fit_random_hal(X, y, family, smoothness::Int, nfeatures::Union{Int, Nothing}, sampler_params::NamedTuple, weights::Nothing; glmnet_args...) = fit_random_hal(X, y, family, smoothness, nfeatures, sampler_params::NamedTuple, ones(nrow(X)); glmnet_args...)
+fit_random_hal(X, y, family, smoothness::Int, nfeatures::Union{Int, Nothing}, min_nonzeros::Int, sampler_params::NamedTuple, weights::Nothing; glmnet_args...) = fit_random_hal(X, y, family, smoothness, nfeatures, min_nonzeros, sampler_params::NamedTuple, ones(nrow(X)); glmnet_args...)
+
+# If no min_nonzeros provided, set this equal to zero
+fit_random_hal(X, y, family, smoothness::Int, nfeatures::Union{Int, Nothing}, sampler_params::NamedTuple, weights::Nothing; glmnet_args...) = fit_random_hal(X, y, family, smoothness, nfeatures, 0, sampler_params::NamedTuple, ones(nrow(X)); glmnet_args...)
 
 # If no nfeatures are provided, call function assuming the asymptotically optimal number of basis functions
+fit_random_hal(X, y, family, smoothness::Int, nfeatures::Nothing, min_nonzeros::Int, sampler_params::NamedTuple, weights::AbstractVector{<:Real}; glmnet_args...) = fit_random_hal(X, y, family, smoothness, Int(round(length(y) * log(length(y)))), min_nonzeros, sampler_params, weights; glmnet_args...)
 fit_random_hal(X, y, family, smoothness::Int, nfeatures::Nothing, sampler_params::NamedTuple, weights::AbstractVector{<:Real}; glmnet_args...) = fit_random_hal(X, y, family, smoothness, Int(round(length(y) * log(length(y)))), sampler_params, weights; glmnet_args...)
 
 # Get predictions from a set of fitted HAL parameters and new data
