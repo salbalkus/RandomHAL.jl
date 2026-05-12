@@ -68,9 +68,16 @@ function random_sections_and_knots(X::Tables.Columns, n_sampled_features; guaran
 
     # First we construct the sections that we want to guarantee are in the basis
     if length(guaranteed_sections) > 0
-        fixed_sections = reduce(vcat, fill.(guaranteed_sections, n))
-        # TODO: Line below is relatively slow, could make it faster
-        fixed_knots = reduce(vcat, [[coltypes[s] == Bool ? true : X[s][i] for s in section] for i in 1:n] for section in guaranteed_sections)
+        # Test if all section ids represent accessible columns in the dataset
+        if all(s >= 1 && s <= d for s in reduce(vcat, guaranteed_sections))
+            fixed_sections = reduce(vcat, fill.(guaranteed_sections, n))
+            # TODO: Line below is relatively slow, could make it faster
+            fixed_knots = reduce(vcat, [[coltypes[s] == Bool ? true : X[s][i] for s in section] for i in 1:n] for section in guaranteed_sections)
+        else
+            #@warn "Some sections in `guaranteed_sections` argument were not valid column indices. Ignoring the argument `guaranteed_sections`"
+            fixed_sections = Vector{Vector{Int}}()
+            fixed_knots = Vector{Vector{Union{Real, Bool}}}()
+        end
     else
         fixed_sections = Vector{Vector{Int}}()
         fixed_knots = Vector{Vector{Union{Real, Bool}}}()
