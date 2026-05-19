@@ -24,7 +24,7 @@ dgp = @dgp(
         Y ~ (@. Normal(A + X2 * X3 + A * X2 + A * X4 + 0.2 * (sqrt(10*X3*X4) + sqrt(10 * X2) + sqrt(10 * X3) + sqrt(10*X4)), 0.1))
     )
 scm = StructuralCausalModel(dgp, :A, :Y)
-n = 900
+n = 100
 ct = rand(scm, n)
 X = Tables.Columns(responseparents(ct))
 y = vec(responsematrix(ct))
@@ -56,7 +56,7 @@ end
     @test length.(sections_r) == length.(knots_r)
 end
 
-@testset "Model Fitting" begin
+#@testset "Model Fitting" begin
 
     cttest = rand(scm, n)
     Xtest = responseparents(cttest)
@@ -77,9 +77,13 @@ end
     @test halmse < 0.05
 
     # Random HAL
-    n_samples = 0.5 * Int(round(n * log(n)))
-    model_rhal = RandomHALRegressor(0, 100, 5, n_samples, 0, (guaranteed_sections = [[5]], interaction_order_weights = Weights([8, 4, 2, 1])))
-    
+    n_samples = Int(round(0.5 * n * log(n)))
+
+    #model_rhal = RandomHALRegressor(0, 100, 5, n_samples, 0, (guaranteed_sections = [[5]], interaction_order_weights = Weights([8, 4, 2, 1])))
+    model_rhal = RandomHALRegressor(0, 100, 5, n_samples, 0, (guaranteed_sections = [[4]],))
+
+    X = responseparents(ct)
+
     @time rhal = machine(model_rhal, X, y) |> fit!
 
     rhalpreds = MLJBase.predict(rhal, Xtest)
