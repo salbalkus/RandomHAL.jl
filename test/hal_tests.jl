@@ -56,7 +56,7 @@ end
     @test length.(sections_r) == length.(knots_r)
 end
 
-#@testset "Model Fitting" begin
+@testset "Model Fitting" begin
 
     cttest = rand(scm, n)
     Xtest = responseparents(cttest)
@@ -79,11 +79,8 @@ end
     # Random HAL
     n_samples = Int(round(0.5 * n * log(n)))
 
-    #model_rhal = RandomHALRegressor(0, 100, 5, n_samples, 0, (guaranteed_sections = [[5]], interaction_order_weights = Weights([8, 4, 2, 1])))
-    model_rhal = RandomHALRegressor(0, 100, 5, n_samples, 0, (guaranteed_sections = [[4]],))
-
-    X = responseparents(ct)
-
+    #model_rhal = RandomHALRegressor(0, 100, 5, n_samples, (guaranteed_sections = [[5]], interaction_order_weights = Weights([8, 4, 2, 1])))
+    model_rhal = RandomHALRegressor(0, 100, 5, n_samples, (guaranteed_sections = [[4]],))
     @time rhal = machine(model_rhal, X, y) |> fit!
 
     rhalpreds = MLJBase.predict(rhal, Xtest)
@@ -104,7 +101,7 @@ end
     halbinmse = mean((halpredsbin .- conmean(scm, cttest, :A)).^2)
     
     #min_nonzeros = Int(floor(sqrt(n)))
-    model_brhal = RandomHALBinaryClassifier(0, 100, 5, n_samples, 0, NamedTuple())
+    model_brhal = RandomHALBinaryClassifier(0, 100, 5, n_samples, NamedTuple())
     @time rhalbin = machine(model_brhal, Xbin, A) |> fit!
     rhalpredsbin = MLJBase.predict(rhalbin, Xbintest)
     rhalbinmse = mean((rhalpredsbin .- conmean(scm, cttest, :A)).^2)

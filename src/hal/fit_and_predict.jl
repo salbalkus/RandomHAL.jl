@@ -57,7 +57,7 @@ function fit_random_hal(X, y, family, smoothness::Int, nfeatures::Int, sampler_p
 end
 
 # If no weights are provided, assume equal weights
-fit_random_hal(X, y, family, smoothness::Int, nfeatures::Union{Int, Nothing}, sampler_params::NamedTuple, weights::Nothing; glmnet_args...) = fit_random_hal(X, y, family, smoothness, nfeatures, sampler_params, ones(nrow(X)); glmnet_args...)
+fit_random_hal(X, y, family, smoothness::Int, nfeatures::Int, sampler_params::NamedTuple, weights::Nothing; glmnet_args...) = fit_random_hal(X, y, family, smoothness, nfeatures, sampler_params, ones(nrow(X)); glmnet_args...)
 
 # Get predictions from a set of fitted HAL parameters and new data
 function predict_hal(params::HALParameters, Xnew)
