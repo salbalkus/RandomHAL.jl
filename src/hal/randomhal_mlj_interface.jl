@@ -1,24 +1,24 @@
-const RHAL_DEFAULT_NLAMBDA = 100
-const RHAL_DEFAULT_NFOLDS = 5
+const RHAL_DEFAULT_SMOOTHNESS = 0
+const RHAL_DEFAULT_NFEATURES = nothing
+const RHAL_DEFAULT_SAMPLER = NamedTuple()
+const RHAL_DEFAULT_KWARGS = (standardize = false, nlambda = 100, nfolds = 5)
 
 ### Continuous Data ###
 mutable struct RandomHALRegressor <: MMI.Deterministic
     smoothness::Int
-    nlambda::Int
-    nfolds::Int
     nfeatures::Union{Int, Nothing}
     sampler_params::NamedTuple
+    glmnet_kwargs::NamedTuple
 end
 
-RandomHALRegressor() = RandomHALRegressor(0, RHAL_DEFAULT_NLAMBDA, RHAL_DEFAULT_NFOLDS, nothing, NamedTuple())
-RandomHALRegressor(nfeatures) = RandomHALRegressor(0, RHAL_DEFAULT_NLAMBDA, RHAL_DEFAULT_NFOLDS, nfeatures, NamedTuple())
-RandomHALRegressor(smoothness, nfeatures) = RandomHALRegressor(smoothness, RHAL_DEFAULT_NLAMBDA, RHAL_DEFAULT_NFOLDS, nfeatures, NamedTuple())
-RandomHALRegressor(smoothness, nfeatures, sampler_params) = RandomHALRegressor(smoothness, RHAL_DEFAULT_NLAMBDA, RHAL_DEFAULT_NFOLDS, nfeatures, sampler_params)
+RandomHALRegressor() = RandomHALRegressor(RHAL_DEFAULT_SMOOTHNESS, RHAL_DEFAULT_NFEATURES, RHAL_DEFAULT_SAMPLER, RHAL_DEFAULT_KWARGS)
+RandomHALRegressor(smoothness) = RandomHALRegressor(smoothness, RHAL_DEFAULT_NFEATURES, RHAL_DEFAULT_SAMPLER, RHAL_DEFAULT_KWARGS)
+RandomHALRegressor(smoothness, nfeatures) = RandomHALRegressor(smoothness, nfeatures, RHAL_DEFAULT_SAMPLER, RHAL_DEFAULT_KWARGS)
+RandomHALRegressor(smoothness, nfeatures, sampler_params) = RandomHALRegressor(smoothness, nfeatures, sampler_params, RHAL_DEFAULT_KWARGS)
 
 function MLJBase.fit(model::RandomHALRegressor, verbosity, X, y, w = nothing)
     n = length(y)
-    alpha = 1.0# - (1.0/sqrt(n))
-    params, lasso = fit_random_hal(X, y, Normal(), model.smoothness, model.nfeatures, model.sampler_params, w; standardize = true, nlambda = model.nlambda, nfolds = model.nfolds, alpha = alpha)
+    params, lasso = fit_random_hal(X, y, Normal(), model.smoothness, model.nfeatures, model.sampler_params, w; model.glmnet_kwargs...)
     fitresult = (params = params,)
     cache = nothing
     report = (lasso=lasso,)
@@ -30,21 +30,19 @@ MLJBase.predict(model::RandomHALRegressor, fitresult, Xnew) = predict_hal(fitres
 ### Binary Data ###
 mutable struct RandomHALBinaryClassifier <: MMI.Probabilistic
     smoothness::Int
-    nlambda::Int
-    nfolds::Int
     nfeatures::Union{Int, Nothing}
     sampler_params::NamedTuple
+    glmnet_kwargs::NamedTuple
 end
 
-RandomHALBinaryClassifier() = RandomHALBinaryClassifier(0, RHAL_DEFAULT_NLAMBDA, RHAL_DEFAULT_NFOLDS, nothing, NamedTuple())
-RandomHALBinaryClassifier(nfeatures) = RandomHALBinaryClassifier(0, RHAL_DEFAULT_NLAMBDA, RHAL_DEFAULT_NFOLDS, nfeatures, NamedTuple())
-RandomHALBinaryClassifier(smoothness, nfeatures) = RandomHALBinaryClassifier(smoothness, RHAL_DEFAULT_NLAMBDA, RHAL_DEFAULT_NFOLDS, nfeatures, NamedTuple())
-RandomHALBinaryClassifier(smoothness, nfeatures, sampler_params) = RandomHALBinaryClassifier(smoothness, RHAL_DEFAULT_NLAMBDA, RHAL_DEFAULT_NFOLDS, nfeatures, sampler_params)
+RandomHALBinaryClassifier() = RandomHALBinaryClassifier(RHAL_DEFAULT_SMOOTHNESS, RHAL_DEFAULT_NFEATURES, RHAL_DEFAULT_SAMPLER, RHAL_DEFAULT_KWARGS)
+RandomHALBinaryClassifier(smoothness) = RandomHALBinaryClassifier(smoothness, RHAL_DEFAULT_NFEATURES, RHAL_DEFAULT_SAMPLER, RHAL_DEFAULT_KWARGS)
+RandomHALBinaryClassifier(smoothness, nfeatures) = RandomHALBinaryClassifier(smoothness, nfeatures, RHAL_DEFAULT_SAMPLER, RHAL_DEFAULT_KWARGS)
+RandomHALBinaryClassifier(smoothness, nfeatures, sampler_params) = RandomHALBinaryClassifier(smoothness, nfeatures, sampler_params, RHAL_DEFAULT_KWARGS)
 
 function MLJBase.fit(model::RandomHALBinaryClassifier, verbosity, X, y::Array{Bool, 1}, w = nothing)
     n = length(y)
-    alpha = 1.0# - (1.0/sqrt(n))
-    params, lasso = fit_random_hal(X, [.!(y) y], Binomial(), model.smoothness, model.nfeatures, model.sampler_params, w; standardize = true, nlambda = model.nlambda, nfolds = model.nfolds, alpha = alpha)
+    params, lasso = fit_random_hal(X, [.!(y) y], Binomial(), model.smoothness, model.nfeatures, model.sampler_params, w; model.glmnet_kwargs...)
     fitresult = (params = params,)
     cache = nothing
     report = (lasso=lasso,)
