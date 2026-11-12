@@ -52,6 +52,7 @@ using FFTW
 # G: n × n dense adjacency matrix (Bool, BitMatrix, or Int/Float)
 # Returns Z of size (n, K * m) containing the U-statistics for k = 0, ..., K - 1.
 function graph_neighbor_u_statistics(X::AbstractMatrix{<:Real}, G::AbstractMatrix, K::Int)
+    K = K + 1
     n, m = size(X)
     @assert size(G) == (n, n) "G must be n × n"
     K <= 0 && return Matrix{Float64}(undef, n, 0)
@@ -112,12 +113,33 @@ function graph_neighbor_u_statistics(X::AbstractMatrix{<:Real}, G::AbstractMatri
         end
     end
 
-    # Flatten (n, K, m) into a 2D matrix of size (n, K * m)
-    return reshape(Z, n, K * m)
+    # Remove the zeroth-order statistic while preserving the 3D shape.
+    return Z[:, 2:K, :]
 end
 
 
-graph_neighbor_u_statistics(basis, X.arrays.G, 10)  
+basis_expanded = graph_neighbor_u_statistics(basis, X.arrays.G, 10) 
 
+# Test first-order sum
+first_function = basis_expanded[:, 1, :]
+first_denom = sum(X.arrays.G, dims=2)
+true_first_function = (X.arrays.G * basis) ./ ifelse.(first_denom .> 0, first_denom, 1)
+@test first_function == true_first_function
+
+# Test second-order sum
+second_function = basis_expanded[:, 2, :]
+second_denom = binomial.(sum(X.arrays.G, dims=2), 2)
+
+true_second_function = ((X.arrays.G * basis).^2 - X.arrays.G * basis.^2) ./ (2 .* ifelse.(second_denom .> 0, second_denom, 1))
+
+@test true_second_function  == second_function
+
+# Test third-order sum
+third_function = basis_expanded[:, 3, :]
+denom = binomial.(sum(X.arrays.G, dims=2), 3)
+
+true_third_function = ((X.arrays.G * basis).^3 .- 3 .* (X.arrays.G * basis.^2) .* (X.arrays.G * basis) .+ 2 .* X.arrays.G * basis.^3) ./ (6 .* ifelse.(denom .> 0, denom, 1))
+
+@test true_third_function == third_function
 
 
